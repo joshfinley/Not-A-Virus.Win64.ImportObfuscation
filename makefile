@@ -15,12 +15,12 @@ all: $(SOURCES) $(EXECUTABLE)
 # assemble program
 $(OBJECTS): $(SOURCES)
 	@$(AS) $(ASFLAGS) $(SOURCES) 
-	@echo asm $<
+	@echo + asm $<
 
 # create executable
 $(EXECUTABLE): $(OBJECTS)
 	@$(LD) $(LDFLAGS) $(OBJECTS) 
-	@echo link $<
+	@echo + link $<
 	@rm main.obj
 
 # clean folder

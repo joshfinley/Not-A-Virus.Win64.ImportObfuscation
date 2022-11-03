@@ -23,27 +23,30 @@
 ; the same results in C++. Enjoy!
 ;----------------------------------------------------------------- @davovich --
 option win64:0x08, casemap:none
-
 include win.inc
+; 
+; Our defined hashes / hashing values. We mask embedded hashes, offsets, and
+; primes with our own value to avoid detections on these values.
+; 
+hash_mask    equ 0x29A29A29A29A29A2
+hash_offset  equ 0xcbf29ce484222325 xor hash_mask
+hash_prime   equ 0x00000100000001b3 xor hash_mask
+hash_ntdll   equ 0xA86B1A076C2A987B xor hash_mask
+hash_ntavm   equ 0xFFFFFFFFFFFFFFFF xor hash_mask
 
-hash_offset  equ 0xcbf29ce484222325  
-hash_prime   equ 0x100000001b3   ; homework - how might you improve this? :)
-hash_ntdll   equ 0xA86B1A076C2A987B
+; --- structures                            
+dapi_entry struct                           ; dynamic import table entry
+    address qword ?                         ; our encoded function pointer           
+    hash    qword ?                         ; our encoded hash
+dapi_entry ends                             ;
 
-; --- structures 
-dapi_entry struct
-    address qword ?    
-    hash    qword ?    
-dapi_entry ends
-
-dapi struct
-    entries qword ?
-    len     dword ?
-dapi ends
+dapi struct                                 ; our dynamic import table
+    entries qword ?                         ; pointer to entries
+    len     dword ?                         ; number of entries
+dapi ends                                   ;
 
 ; --- data 
 data segment align(0x10) 'data' read write
-    mov     r8, gs:[0x60]
 data ends
 
 ; --- code 
@@ -51,17 +54,79 @@ text segment align(0x10) 'code' read execute
 start proc
     mov     rcx, hash_ntdll
     call    getmod
+    mov     rcx, rax
+    mov     rdx, hash_ntavm
+    call    getexp
     ret
 start endp
+
+getexp proc fastcall base:qword, hash:qword
+    local   nth:qword                       ; nt headers
+    local   dir:qword                       ; data directory 
+    local   exp:qword                       ; export directory
+    local   aof:qword                       ; address of function
+    local   aon:qword                       ; address of name
+    local   aoo:qword                       ; address of name ordinal
+    push    rbx
+    push    rsi
+    push    rdi
+    push    r10
+    xor     eax, eax                        ; eax is offset holder
+    mov     rsi, rcx                        ; rsi is the module base
+    mov     r8, rsi                         ; r8 is a backup of the module base
+    mov     rdi, rdx                        ; rdi is the target hash
+    mov     eax, [rsi].dos_hdr.e_lfanew     ; eax is the dword at rsi offset by 0x3C
+    add     rsi, rax                        ; rsi is the nt header
+    lea     rsi, [rsi].nt_hdr.opt.d_dir     ; rsi is the offset of the optional header data dir.
+    mov     dir, rsi                
+    mov     ebx, [rsi].img_data_dir.va
+    add     rbx, r8                         ; rbx is the VA of the export directory
+    mov     exp, rbx
+    mov     eax, [rbx].exp_dir.aon
+    add     rax, r8
+    mov     aon, rax
+    mov     eax, [rbx].exp_dir.aof
+    add     rax, r8
+    mov     aof, rax
+    mov     eax, [rbx].exp_dir.aoo
+    mov     rbx, [exp]
+    xor     esi, esi                        ; esi is the counter
+_loop:
+    cmp     esi, [rbx].exp_dir.n_names
+    jge     _done
+    mov     rcx, [aon+rsi*4]
+    mov     ecx, dword ptr [rcx]
+    add     rcx, r8
+    mov     r10, rcx
+    call    strlen
+    mov     rcx, r10
+    mov     edx, eax
+    call    gethash
+    cmp     rax, rdi
+    inc     esi
+    je      _match
+    jmp     _loop
+_match:
+    mov     rax, [aoo+rcx*4]
+    mov     rax, [aof+rax*4]
+    add     rax, r8
+    jmp     _done
+_done:
+    pop     r10
+    pop     rdi
+    pop     rsi
+    pop     rbx
+    retn
+getexp endp
 
 getmod proc fastcall hash:qword
     local   modname[256*2]:byte
     local   first:qword
     local   curr:qword
-    push    rbx                         
+    push    rbx        
+    push    rsi                 
     push    rdi                         
-    push    rsi
-    mov     rdi, rcx            
+    mov     rdi, rcx
     mov     rsi, [gs:0x60]
     mov     rsi, [rsi].peb.ldr          ; rsi points to PEB_LDR_DATA entry 
     mov     rsi, [rsi].pld.moml.fw-10h  ; rsi now points to LDR_MODULE link
@@ -90,8 +155,8 @@ _loop:
 _match:
     mov     rax, [rbx].ldte.dllbase
 _done:
-    pop     rsi
     pop     rdi
+    pop     rsi
     pop     rbx
     retn
 getmod endp
@@ -103,17 +168,21 @@ gethash proc fastcall src:qword, len:dword
     xor     rbx, rbx
     mov     rsi, rcx                        ; rsi is the source buffer
     xor     ecx, ecx                        ; ecx is the counter
-    mov     rax, hash_offset                 ; rax is the hash
+    mov     rax, hash_offset                ; rax is the encoded hash (basis)
+    mov     r8, hash_mask                   ; decode the basis
+    xor     rax, r8                         ; ...
 _loop:
     cmp     ecx, edx
     ja      _done
     mov     bl, [rsi+rcx]
-    xor     rax, rbx
-    mov     rdi, hash_prime
-    imul    rax, rdi
+    xor     rax, rbx                        ; hash = hash ^ src[i]
+    mov     rdi, hash_prime                 ; rdi is the prime (encoded)
+    xor     rdi, r8                         ; decode the prime
+    imul    rax, rdi                        ; hash = hash * prime
     inc     ecx
     jmp     _loop
 _done:
+    xor     rax, r8                         ; mask the hash
     pop     rdi
     pop     rsi
     pop     rbx
@@ -172,19 +241,34 @@ _done:
     retn
 wstrtolower endp
 
-wcslen proc fastcall src:qword
+strlen proc fastcall src:qword
     push    rbx
     xor     eax, eax
 _loop:
-    mov     bx, [rcx+rax*2]
-    test    bx, bx
+    mov     bl, [rcx+rax]
+    test    bl, bl
     jz      _done
     inc     eax
     jmp     _loop
 _done:
     pop     rbx
     retn
-wcslen endp
+strlen endp
+
+
+; wcslen proc fastcall src:qword
+;     push    rbx
+;     xor     eax, eax
+; _loop:
+;     mov     bx, [rcx+rax*2]
+;     test    bx, bx
+;     jz      _done
+;     inc     eax
+;     jmp     _loop
+; _done:
+;     pop     rbx
+;     retn
+; wcslen endp
 
 text ends
 end

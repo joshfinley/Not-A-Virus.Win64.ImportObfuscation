@@ -171,7 +171,7 @@ ldte struct
     signinglevel                byte ?                          ; 0x011c
 ldte ends
 
-image_dos_header struct
+dos_hdr struct
     e_magic    word ?                                           ; 0x0000 
     e_cblp     word ?                                           ; 0x0002
     e_cp       word ?                                           ; 0x0004
@@ -191,9 +191,9 @@ image_dos_header struct
     e_oeminfo  word ?                                           ; 0x0026
     e_res2     word 10 dup(?)                                   ; 0x0028
     e_lfanew   dword ?                                          ; 0x003c
-image_dos_header ends
+dos_hdr ends
 
-image_file_header struct
+file_hdr struct
     machine              word ?                                 ; 0x0000
     numberofsections     word ?                                 ; 0x0002
     timedatestamp        dword ?                                ; 0x0004
@@ -201,14 +201,14 @@ image_file_header struct
     numberofsymbols      dword ?                                ; 0x000c
     sizeofoptionalheader word ?                                 ; 0x0010
     characteristics      word ?                                 ; 0x0012
-image_file_header ends
+file_hdr ends
 
-image_data_directory struct
-    virtualaddress dword ? ; 0x0000
+img_data_dir struct
+    va dword ? ; 0x0000
     _size          dword ? ; 0x0004
-image_data_directory ends
+img_data_dir ends
 
-image_optional_header64 struct
+opt_hdr struct
     magic                       word ?                          ; 0x0000
     majorlinkerversion          byte ?                          ; 0x0002
     minorlinkerversion          byte ?                          ; 0x0003
@@ -238,16 +238,16 @@ image_optional_header64 struct
     sizeofheapcommit            qword ?                         ; 0x0060
     loaderflags                 dword ?                         ; 0x0068
     numberofrvaandsizes         dword ?                         ; 0x006c
-    datadirectory               image_data_directory 16 dup(<>) ; 0x0070
-image_optional_header64 ends
+    d_dir                       img_data_dir 16 dup(<>)         ; 0x0070
+opt_hdr ends
 
-image_nt_headers64 struct
+nt_hdr struct
     signature      dword ?                                      ; 0x0000
-    fileheader     image_file_header <>                         ; 0x0004
-    optionalheader image_optional_header64 <>                   ; 0x0018
-image_nt_headers64 ends
+    fileheader     file_hdr <>                         ; 0x0004
+    opt             opt_hdr<>                   ; 0x0018
+nt_hdr ends
 
-image_export_directory struct
+exp_dir struct
     characteristics       dword ?                               ; 0x0000
     timedatestamp         dword ?                               ; 0x0004
     majorversion          word  ?                               ; 0x0008
@@ -255,10 +255,10 @@ image_export_directory struct
     _name                 dword ?                               ; 0x000c
     base                  dword ?                               ; 0x0010
     numberoffunctions     dword ?                               ; 0x0014
-    numberofnames         dword ?                               ; 0x0018
-    addressoffunctions    dword ?                               ; 0x001c
-    addressofnames        dword ?                               ; 0x0020
-    addressofnameordinals dword ?                               ; 0x0024
-image_export_directory ends
+    n_names               dword ?                               ; 0x0018
+    aof                   dword ?                               ; 0x001c
+    aon                   dword ?                               ; 0x0020
+    aoo                   dword ?                               ; 0x0024
+exp_dir ends
 
 endif ; !_win_inc
