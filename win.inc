@@ -243,8 +243,8 @@ opt_hdr ends
 
 nt_hdr struct
     signature      dword ?                                      ; 0x0000
-    fileheader     file_hdr <>                         ; 0x0004
-    opt             opt_hdr<>                   ; 0x0018
+    fileheader      file_hdr <>                                 ; 0x0004
+    opt             opt_hdr<>                                   ; 0x0018
 nt_hdr ends
 
 exp_dir struct

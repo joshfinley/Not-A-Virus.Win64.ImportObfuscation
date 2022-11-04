@@ -18,9 +18,22 @@
 ; ---
 ; 
 ; This begs the question, how can we avoid this? An obvious answer is to
-; encode pointers. This program demonstrates how to achieve this in
+; encode pointers. We can store our dynamic imports table in an encoded
+; format and wrap our calls with a function to decode and call the real
+; pointer.
+;
+; Another issue is the existence of hash databases. At this point, you can
+; bet on most of your generic hashes for Windows APIs are in these databases.
+; We can avoid this by encoding our hashes at rest, but this introduces
+; some undesirable indicators into our binary. With a bit of work we can
+; avoid storing our entire encoded hashes in our code and instead compute
+; them at runtime. We can also get the added bonus of adding quite a few
+; cycles to our execution at the same time, which might help avoid automated
+; dynamic analysis.
+;
+; This program demonstrates how to achieve this in
 ; assembly. At the bottom, I've also included example code to achieve
-; the same results in C++. Enjoy!
+; some similar results in C++. Enjoy!
 ;----------------------------------------------------------------- @davovich --
 option win64:0x08, casemap:none
 include win.inc
@@ -31,10 +44,10 @@ include win.inc
 hash_mask    equ 0x29A29A29A29A29A2
 hash_offset  equ 0xcbf29ce484222325 xor hash_mask
 hash_prime   equ 0x00000100000001b3 xor hash_mask
-hash_ntdll   equ 0xA86B1A076C2A987B xor hash_mask
-hash_ntavm   equ 0xFFFFFFFFFFFFFFFF xor hash_mask
+hash_ntdll   equ 0x5703856CC8FC1C79
+hash_ntavm   equ 0x6640A8978F501F9A
 
-; --- structures                            
+; --- structures                    
 dapi_entry struct                           ; dynamic import table entry
     address qword ?                         ; our encoded function pointer           
     hash    qword ?                         ; our encoded hash
@@ -44,10 +57,6 @@ dapi struct                                 ; our dynamic import table
     entries qword ?                         ; pointer to entries
     len     dword ?                         ; number of entries
 dapi ends                                   ;
-
-; --- data 
-data segment align(0x10) 'data' read write
-data ends
 
 ; --- code 
 text segment align(0x10) 'code' read execute
@@ -73,20 +82,20 @@ getexp proc fastcall base:qword, hash:qword
     push    r10
     xor     eax, eax                        ; eax is offset holder
     mov     rsi, rcx                        ; rsi is the module base
-    mov     r8, rsi                         ; r8 is a backup of the module base
+    mov     r10, rsi                        ; r10 is a backup of the module base
     mov     rdi, rdx                        ; rdi is the target hash
     mov     eax, [rsi].dos_hdr.e_lfanew     ; eax is the dword at rsi offset by 0x3C
     add     rsi, rax                        ; rsi is the nt header
     lea     rsi, [rsi].nt_hdr.opt.d_dir     ; rsi is the offset of the optional header data dir.
     mov     dir, rsi                
     mov     ebx, [rsi].img_data_dir.va
-    add     rbx, r8                         ; rbx is the VA of the export directory
+    add     rbx, r10                        ; rbx is the VA of the export directory
     mov     exp, rbx
     mov     eax, [rbx].exp_dir.aon
-    add     rax, r8
+    add     rax, r10
     mov     aon, rax
     mov     eax, [rbx].exp_dir.aof
-    add     rax, r8
+    add     rax, r10
     mov     aof, rax
     mov     eax, [rbx].exp_dir.aoo
     mov     rbx, [exp]
@@ -94,22 +103,25 @@ getexp proc fastcall base:qword, hash:qword
 _loop:
     cmp     esi, [rbx].exp_dir.n_names
     jge     _done
-    mov     rcx, [aon+rsi*4]
-    mov     ecx, dword ptr [rcx]
-    add     rcx, r8
-    mov     r10, rcx
+    mov     rcx, [aon]
+    mov     ecx, [rcx+rsi*4]
+    add     rcx, r10
+    mov     rbx, rcx
     call    strlen
-    mov     rcx, r10
+    mov     rcx, rbx
     mov     edx, eax
     call    gethash
-    cmp     rax, rdi
     inc     esi
+    cmp     rax, rdi
     je      _match
     jmp     _loop
 _match:
-    mov     rax, [aoo+rcx*4]
-    mov     rax, [aof+rax*4]
-    add     rax, r8
+    xor     eax, eax
+    mov     rcx, aoo
+    movzx   eax, word ptr [rcx+rsi*2]
+    mov     rcx, aof
+    mov     eax, [rcx+rsi*4]
+    add     rax, r10
     jmp     _done
 _done:
     pop     r10
@@ -145,6 +157,7 @@ _loop:
     call    wstrtolower                 ; returns the length as well (in bytes, not words)
     lea     rcx, modname
     mov     rdx, rax
+    imul    rdx, 2
     call    gethash
     cmp     rax, rdi
     je      _match
@@ -173,7 +186,7 @@ gethash proc fastcall src:qword, len:dword
     xor     rax, r8                         ; ...
 _loop:
     cmp     ecx, edx
-    ja      _done
+    je      _done
     mov     bl, [rsi+rcx]
     xor     rax, rbx                        ; hash = hash ^ src[i]
     mov     rdi, hash_prime                 ; rdi is the prime (encoded)
@@ -254,7 +267,6 @@ _done:
     pop     rbx
     retn
 strlen endp
-
 
 ; wcslen proc fastcall src:qword
 ;     push    rbx
