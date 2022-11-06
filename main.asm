@@ -24,13 +24,9 @@
 ;
 ; Another issue is the existence of hash databases. At this point, you can
 ; bet on most of your generic hashes for Windows APIs are in these databases.
-; We can avoid this by encoding our hashes at rest, but this introduces
-; some undesirable indicators into our binary. With a bit of work we can
-; avoid storing our entire encoded hashes in our code and instead compute
-; them at runtime. We can also get the added bonus of adding quite a few
-; cycles to our execution at the same time, which might help avoid automated
-; dynamic analysis.
-;
+; We can avoid this by encoding our hashes at rest, but if were not careful,
+; we'll introduce too much entropy in specific blocks.
+
 ; This program demonstrates how to achieve this in
 ; assembly. At the bottom, I've also included example code to achieve
 ; some similar results in C++. Enjoy!
@@ -41,11 +37,65 @@ include win.inc
 ; Our defined hashes / hashing values. We mask embedded hashes, offsets, and
 ; primes with our own value to avoid detections on these values.
 ; 
-hash_mask    equ 0x29A29A29A29A29A2
-hash_offset  equ 0xcbf29ce484222325 xor hash_mask
-hash_prime   equ 0x00000100000001b3 xor hash_mask
-hash_ntdll   equ 0x5703856CC8FC1C79
-hash_ntavm   equ 0x6640A8978F501F9A
+
+stringify macro arg
+    local tmp
+    tmp catstr <'>,arg,<'>
+    exitm tmp
+endm
+
+rnd_seed        textequ stringify(@Time)
+seed_mask       equ 0x29A29A29A29A29A2
+hash_mask       equ 0x29A29A29A29A29A2
+hash_offset     equ 0xcbf29ce484222325 xor hash_mask
+hash_prime      equ 0x00000100000001b3 xor hash_mask
+hash_ntdll      equ 0x5703856CC8FC1C79
+hash_ntavm      equ 0x6640A8978F501F9A
+
+; emit the bytes of a constant string
+emit_bytes macro string
+    for value, <string>
+        byte value
+    endm
+endm
+
+gethash_m macro src, constname
+    local len,i,c,r
+    len textequ %(@SizeStr(<src>)) -2 ;; -2 is for the double quote
+    i = 0
+    repeat len
+        c  substr <src>, i+1, 1
+        byte stringify(c)
+    endm
+endm
+
+; break the 64 bit _hash into two 32 bit parts and set register dst to the
+; reassembled result
+genhash macro _hash, dst, tmp
+    local   hi 
+    local   lo 
+    hi      = _hash and 0xffffffff00000000
+    lo      = _hash and 0x00000000ffffffff
+    mov     dst, hi
+    mov     tmp, lo
+    or      dst, tmp
+endm
+
+; emit an opaque predicate using register r1 with a fake jump to dead_offset
+; emit_opq macro r1, dead_offset
+;     local   jl0
+;     local   jl1
+;     xor     r1, r1
+; jl0:
+;     test    r1, r1
+;     jz      jl1
+;     jmp     jl0
+;     lea     r1, offset jl1
+;     test    r1, r1
+;     jnz     jl0
+;     db      0xeb, dead_offset
+; jl1:
+; endm
 
 ; --- structures                    
 dapi_entry struct                           ; dynamic import table entry
@@ -61,11 +111,19 @@ dapi ends                                   ;
 ; --- code 
 text segment align(0x10) 'code' read execute
 start proc
-    mov     rcx, hash_ntdll
+    local   d_ents[10]:dapi_entry
+    local   d_table:dapi
+    local   key:qword
+    gethash_m 'NtAllocateVirtualMemory', testcnst
+    genhash hash_mask, rcx, rax             ; put together the high and low parts of the mask
+    mov     [key], rcx                      ; function key is now on the stack
+
+    genhash hash_ntdll, rcx, rax
     call    getmod
     mov     rcx, rax
     mov     rdx, hash_ntavm
     call    getexp
+    
     ret
 start endp
 
@@ -284,4 +342,10 @@ strlen endp
 
 text ends
 end
-; C++ Version------------------------------------------------------------------
+; C++ Version -----------------------------------------------------------------
+
+; Refrences -------------------------------------------------------------------
+; [1] https://web.archive.org/web/20220511043450/https://www.mikrocontroller
+;   .net/attachment/450367/MASM61PROGUIDE.pdf
+; [2] https://web.archive.org/web/20220715024359/http://www.phatcode.net/res
+;   /223/files/html/Chapter_8/CH08-9.html
