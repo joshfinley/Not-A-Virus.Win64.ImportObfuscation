@@ -487,23 +487,10 @@ end                                         ;                                   
 ; emit_junk macro 
 ;     local v1, v2, r0, r1, r2, r3, r4, b
 ;     count = 0
-;     v1 = rnd(0x02)
-;     r0 = (v1 or 1)
-;     r1 = (v1 or 2)
-;     r2 = (v1 or 3)
-;     r3 = (v1 or 4)
-;     r4 = (v1 or 5)
-;     v2 = rnd(0xff)
-; 
-;     emit_junk_op v1, s_mov_rall, r4, r3
-;     emit_junk_op v1, s_add_rall, r4, r1
-;     emit_junk_op v1, s_sub_rall, r4, r1
-;     emit_junk_op v1, s_cmp_rall, r0, r1
-;     emit_junk_jcnd v1, v2
-;     emit_jmp_rel8 v2 
+;     ...
 ; endm
 ; 
-; ; Emit a junk operation of the given type (buggy)
+; ; Emit a junk operation of the given type (example/incomplete)
 ; emit_junk_op macro v1, opc, r1, r2
 ;     if v1 eq 0
 ;         db s_pfx_rexw
@@ -515,8 +502,7 @@ end                                         ;                                   
 ;         db opc
 ;         b = r1
 ;         b = (b shl 3) or (r2)
-;         db b
-; 
+;         db b; 
 ;     elseif v1 eq 2
 ;         db opc
 ;         b = r2
@@ -551,15 +537,4 @@ end                                         ;                                   
 ;     db s_jmp_rel8
 ;     db dist
 ; endm
-; 
-; _movd_mask macro reg, ext
-;     if ext eq 1
-;         db s_pfx_rexwb
-;     endif 
-;     db s_mov_r8_imm8
-;     db random_mask
-;     if ext eq 1
-;         db s_pfx_rexwb
-;     endif
-;     dw s_shl or reg
-; endm
+;
