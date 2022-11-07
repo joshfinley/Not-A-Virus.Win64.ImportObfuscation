@@ -1,4 +1,4 @@
-; <main.asm>    -   Import Obfuscation Demonstration                            ;       
+; <main.asm>    -   Import Obfuscation Demonstration                            ;
 ;                           November 2022                                       ;
 ;                                                                               ;
 ; The method of dynamic import resolution in Windows malware is well known.     ;
@@ -48,7 +48,7 @@
 ;   macros included at the bottom of this file.                                 ;
 ; - Dynamic encoding/decoding, e.g. Blackmatter ransomware.                     ;
 ;                                                                               ;
-;       ~ Enjoy!                                                                ;                                                               ;
+;       ~ Enjoy!                                                                ;                                              ;
 ; -------------------------------------------------------------- @__rdrand ---- ;
 option win64:0x08, casemap:none                                                 ;
 include win.inc                                                                 ;
@@ -74,8 +74,8 @@ static_rnd macro __mask                                                         
 endm                                                                            ;
                                                                                 ;
 random_mask         equ static_rnd(0xffffffff)                                  ;
-hash_basis          equ            0xC59D1C81  xor random_mask                  ;  
-hash_prime          equ            0x01000193  xor random_mask                  ;    
+hash_basis          equ            0xC59D1C81  xor random_mask                  ;
+hash_prime          equ            0x01000193  xor random_mask                  ;
                                                                                 ;
 ;                                                                               ;
 ; Our function hashes will all be double words of high entropy but at least     ;
@@ -86,7 +86,7 @@ hash_ntavm      equ                 0x6973F2B4 xor random_mask                  
                                                                                 ;
 ; Data Structures ------------------------- ;                                   ;
 dapi_entry struct                           ; dynamic import table entry        ;
-    address qword ?                         ; our encoded function pointer      ;    
+    address qword ?                         ; our encoded function pointer      ;
 dapi_entry ends                             ;                                   ;
                                             ;                                   ;
 dapi struct                                 ; our dynamic import table          ;
@@ -130,7 +130,7 @@ mask_ptr proc fastcall value:qword          ;                                   
 _loop:                                      ;                                   ;
     cmp     ecx, 8                          ; eight is sufficient               ;
     je      _done                           ;                                   ;
-    xor     rax, rbx                        ;                                   ; 
+    xor     rax, rbx                        ;                                   ;
     inc     ecx                             ;                                   ;
     shl     rbx, cl                         ; shift the mask over by the rcx    ;
     jmp     _loop                           ; next operation                    ;
@@ -147,7 +147,7 @@ getexp proc fastcall base:qword, hash:qword ;                                   
     local   aof:qword                       ; address of function               ;
     local   aon:qword                       ; address of name                   ;
     local   aoo:qword                       ; address of name ordinal           ;
-    push    rbx                             ;                                   ; 
+    push    rbx                             ;                                   ;
     push    rsi                             ;                                   ;
     push    rdi                             ;                                   ;
     push    r10                             ;                                   ;
@@ -234,9 +234,9 @@ _loop:                                      ; loop over modules                 
     cmp     rax, rdi                        ; match target?                     ;
     je      _match                          ;                                   ;
     mov     rbx, curr                       ; while current != first            ;
-    cmp     rbx, first                      ;                                   ;     
-    je      _done                           ;                                   ;     
-    jmp     _loop                           ;                                   ;     
+    cmp     rbx, first                      ;                                   ;
+    je      _done                           ;                                   ;
+    jmp     _loop                           ;                                   ;
 _match:                                     ;                                   ;
     mov     rax, [rbx].ldte.dllbase         ; get dll base address              ;
 _done:                                      ;                                   ;
@@ -388,20 +388,20 @@ end                                         ;                                   
 ; 
 ; D_EXEC(Api->Ntdll.Entries[idx], args...);
 ;
-; -----------------------------------------------------------------------------
-;                       Future Work - Obfuscation Macros
-; -----------------------------------------------------------------------------
-; x86 registers
-; _eax            equ 0
-; _ecx            equ 1
-; _edx            equ 2
-; _ebx            equ 3
-; _esp            equ 4
-; _ebp            equ 5
-; _esi            equ 6
-; _edi            equ 7
+; ----------------------------------------------------------------------------- ;
+;                       Future Work - Obfuscation Macros                        ;
+; ----------------------------------------------------------------------------- ;
+; ; x86 registers                                                               ;
+; _eax            equ 0                                                         ;
+; _ecx            equ 1                                                         ;
+; _edx            equ 2                                                         ;
+; _ebx            equ 3                                                         ;
+; _esp            equ 4                                                         ;
+; _ebp            equ 5                                                         ;
+; _esi            equ 6                                                         ;
+; _edi            equ 7                                                         ;
 ; 
-; ; x64 extended registers
+; ; x64 extended registers                                                      
 ; _r8             equ 0
 ; _r9             equ 1
 ; _r10            equ 2
