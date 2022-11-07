@@ -400,141 +400,130 @@ end                                         ;                                   
 ; _ebp            equ 5                                                         ;
 ; _esi            equ 6                                                         ;
 ; _edi            equ 7                                                         ;
-; 
-; ; x64 extended registers                                                      
-; _r8             equ 0
-; _r9             equ 1
-; _r10            equ 2
-; _r11            equ 3
-; _r12            equ 4
-; _r13            equ 5
-; _r14            equ 6
-; _r15            equ 7
-; 
-; ; MODRM
-; S_mod_ri        equ 00000000b               ; 0x00 MODRM register indirect
-; s_mod_ra        equ 11000000b               ; 0xC0 MODRM register addressing mode
-; s_mod_1sbdsp    equ 01000000b               ; 0x40 MODRM one byte signed disp
-; s_mod_4sbdsp    equ 10000000b               ; 0x80 MODRM four byte signed disp
-; 
-; ; Prefixes          
-; s_pfx_o16       equ 01100110b               ; 0x66 16/32 bit operand override
-; s_pfx_a16       equ 01100111b               ; 0x67 16/32 bit address override
-; s_pfx_o8        equ 10001000b               ; 0x88 8 bit operand override
-; s_rex           equ 01000000b               ; 0x40 REX (access new 8 bit registers)
-; s_rex_8         equ 01000001b               ; 0x41 REX reg imm mode
-; s_pfx_rexw      equ 01001000b               ; 0x48 REX.W (64 bit operand)
-; s_pfx_rexwb     equ 01001001b               ; 0x49 REX.WB 
-; 
-; ; Opcodes           
-; s_op_pushr      equ 0x50                    ; push rax. OR with reg encodings.
-; s_op_popr       equ 0x58                    ; pop rax. OR with reg encodings
-; 
-; ; Conditional Jumps         
-; s_jb_rel8       equ 0x72                    ; jb/jnae/jc
-; s_jae_rel8      equ 0x73                    ; jnb/jae/jnc
-; s_je_rel8       equ 0x74                    ; jz/ne
-; s_jne_rel8      equ 0x75                    ; jnz/jne
-; s_jna_rel8      equ 0x76                    ; jbe/jna
-; s_ja_rel8       equ 0x77                    ; jnbe/ja
-; s_jnge_rel8     equ 0x7c                    ; jl/jnge
-; s_jd_rel8       equ 0x7d                    ; jnl/jge
-; s_jle_rel8      equ 0x7e                    ; jle/jng
-; s_jf_rel8       equ 0x7f                    ; jnle/jg
-; 
-; ; Relative Jumps            
-; s_jmp_rel8      equ 0xeb                    ; jmp rel8
-; 
-; ; Basic Register Operations         
-; s_add_rall      equ 0x03                    ; add r/16/32/64
-; s_or_rall       equ 0x0b                    ; or  r/16/32/64
-; s_and_rall      equ 0x23                    ; and r/16/32/64
-; s_sub_rall      equ 0x2b                    ; sub r/16/32/64
-; s_xor_rall      equ 0x33                    ; xor r/16/32/64
-; s_cmp_rall      equ 0x3b                    ; cmp r/16/32/64
-; s_mov_rall      equ 0x8b                    ; mov r/16/32/64
-; s_mov_r8_imm8   equ 0xb0                    ; mov r8 imm8
-; s_mov_r8        equ 0x8a                    ; mov r8 r/m8
-; s_mov_r8_imm    equ 0xb8                    ; mov r8 imm8
-; s_mov_r64_imm64 equ 0xC7                    ; mov r64 imm64
-; s_shl           equ 0xe0c1                  ; shl 
-; 
-; ; Get an assembly-time random value of a specific size. Maximum 32 bits. 
-; ; This value will change on successive expansions
-; rnd macro __mask
-;     local m
-;     m=(@SubStr(%@Time,7,2)+@Line)*(@SubStr(%@Date,1,2)+@SubStr(%@Date,4,2)*100+@SubStr(%@Date,7,2))* (-1001)
-;     m=(m+@SubStr(%@Time,1,2)+@SubStr(%@Time,4,2))*(@SubStr(%@Time,7,2)+1)
-;     ifnb <__mask>
-;         m = m and __mask
-;     endif
-;     exitm % m
-; endm
-; 
-; ; Get an assembly-time random byte. This value will stay the same on successive
-; ; expansions
-; static_rnd macro __mask
-;     local m
-;     m=(@SubStr(%@Time,7,2)) xor (@SubStr(%@Date,7,2))
-;     m=(m+@SubStr(%@Time,1,2)+@SubStr(%@Time,4,2))*(@SubStr(%@Time,7,2)+1)
-;     ifnb <__mask>
-;         m = m and __mask
-;     endif
-;     exitm % m
-; endm
-; 
-; ; Emit some junk bytes that look vaguely like real code
-; emit_junk macro 
-;     local v1, v2, r0, r1, r2, r3, r4, b
-;     count = 0
-;     ...
-; endm
-; 
-; ; Emit a junk operation of the given type (example/incomplete)
-; emit_junk_op macro v1, opc, r1, r2
-;     if v1 eq 0
-;         db s_pfx_rexw
-;         db opc
-;         b = r2
-;         b = (b shl 3) or (r1)
-;         db b
-;     elseif v1 eq 1
-;         db opc
-;         b = r1
-;         b = (b shl 3) or (r2)
-;         db b; 
-;     elseif v1 eq 2
-;         db opc
-;         b = r2
-;         b = (b shl 3) or (r1)
-;         db b
-;     endif
-; endm
-; 
-; ; Emit a junk conditional comparison
-; emit_junk_jcnd macro v, dist
-;     if v eq 0
-;         db s_ja_rel8
-;         db dist
-;     elseif v eq 1
-;         db s_jle_rel8
-;         db dist
-;     elseif v eq 2
-;         db s_jne_rel8
-;         db dist
-;     endif
-; endm
-; 
-; ; Emit the bytes of a string
-; emit_bytes macro string
-;     for value, <string>
-;         db value
-;     endm
-; endm
-; 
-; ; Emit a relative 8 jump
-; emit_jmp_rel8 macro dist
-;     db s_jmp_rel8
-;     db dist
-; endm
-;
+;                                                                               ;
+; ; x64 extended registers                                                      ;
+; _r8             equ 0                                                         ;
+; _r9             equ 1                                                         ;
+; _r10            equ 2                                                         ;
+; _r11            equ 3                                                         ;
+; _r12            equ 4                                                         ;
+; _r13            equ 5                                                         ;
+; _r14            equ 6                                                         ;
+; _r15            equ 7                                                         ;
+;                                                                               ;
+; ; MODRM                                                                       ;
+; S_mod_ri        equ 00000000b             ; 0x00 MODRM register indirect      ;
+; s_mod_ra        equ 11000000b             ; 0xC0 MODRM register addressing    ;
+; s_mod_1sbdsp    equ 01000000b             ; 0x40 MODRM one byte signed disp   ;
+; s_mod_4sbdsp    equ 10000000b             ; 0x80 MODRM four byte signed disp  ;
+;                                                                               ;
+; ; Prefixes                                                                    ;
+; s_pfx_o16       equ 01100110b             ; 0x66 16/32 bit operand override   ;
+; s_pfx_a16       equ 01100111b             ; 0x67 16/32 bit address override   ;
+; s_pfx_o8        equ 10001000b             ; 0x88 8 bit operand override       ;
+; s_rex           equ 01000000b             ; 0x40 REX (access new 8 bit regы)  ;
+; s_rex_8         equ 01000001b             ; 0x41 REX reg imm mode             ;
+; s_pfx_rexw      equ 01001000b             ; 0x48 REX.W (64 bit operand)       ;
+; s_pfx_rexwb     equ 01001001b             ; 0x49 REX.WB                       ;
+;                                                                               ;
+; ; Opcodes                                                                     ;
+; s_op_pushr      equ 0x50                  ; push rax. OR with reg encodings.  ;
+; s_op_popr       equ 0x58                  ; pop rax. OR with reg encodings    ;
+;                                                                               ;
+; ; Conditional Jumps                                                           ;
+; s_jb_rel8       equ 0x72                  ; jb/jnae/jc                        ;
+; s_jae_rel8      equ 0x73                  ; jnb/jae/jnc                       ;
+; s_je_rel8       equ 0x74                  ; jz/ne                             ;
+; s_jne_rel8      equ 0x75                  ; jnz/jne                           ;
+; s_jna_rel8      equ 0x76                  ; jbe/jna                           ;
+; s_ja_rel8       equ 0x77                  ; jnbe/ja                           ;
+; s_jnge_rel8     equ 0x7c                  ; jl/jnge                           ;
+; s_jd_rel8       equ 0x7d                  ; jnl/jge                           ;
+; s_jle_rel8      equ 0x7e                  ; jle/jng                           ;
+; s_jf_rel8       equ 0x7f                  ; jnle/jg                           ;
+;                                                                               ;
+; ; Relative Jumps                                                              ;
+; s_jmp_rel8      equ 0xeb                  ; jmp rel8                          ;
+;                                                                               ;
+; ; Basic Register Operations                                                   ;
+; s_add_rall      equ 0x03                  ; add r/16/32/64                    ;
+; s_or_rall       equ 0x0b                  ; or  r/16/32/64                    ;
+; s_and_rall      equ 0x23                  ; and r/16/32/64                    ;
+; s_sub_rall      equ 0x2b                  ; sub r/16/32/64                    ;
+; s_xor_rall      equ 0x33                  ; xor r/16/32/64                    ;
+; s_cmp_rall      equ 0x3b                  ; cmp r/16/32/64                    ;
+; s_mov_rall      equ 0x8b                  ; mov r/16/32/64                    ;
+; s_mov_r8_imm8   equ 0xb0                  ; mov r8 imm8                       ;
+; s_mov_r8        equ 0x8a                  ; mov r8 r/m8                       ;
+; s_mov_r8_imm    equ 0xb8                  ; mov r8 imm8                       ;
+; s_mov_r64_imm64 equ 0xC7                  ; mov r64 imm64                     ;
+; s_shl           equ 0xe0c1                ; shl                               ;
+;                                                                               ;
+; ; Get an assembly-time random value of a specific size. Maximum 32 bits.      ;
+; ; This value will change on successive expansions                             ;
+; rnd macro __mask                                                              ;
+;     local m                                                                   ;
+;     m=(@SubStr(%@Time,7,2)+@Line)*(@SubStr(%@Date,1,2)                        ;
+;     m=m+@SubStr(%@Date,4,2)*100+@SubStr(%@Date,7,2))* (-1001)                 ;
+;     m=(m+@SubStr(%@Time,1,2)+@SubStr(%@Time,4,2))*(@SubStr(%@Time,7,2)+1)     ;
+;     ifnb <__mask>                                                             ;
+;         m = m and __mask                                                      ;
+;     endif                                                                     ;
+;     exitm % m                                                                 ;
+; endm                                                                          ;
+;                                                                               ;
+; ; Emit some junk bytes that look vaguely like real code                       ;
+; emit_junk macro                                                               ;
+;     local v1, v2, r0, r1, r2, r3, r4, b                                       ;
+;     count = 0                                                                 ;
+;     ...                                                                       ;
+; endm                                                                          ;
+;                                                                               ;
+; ; Emit a junk operation of the given type (example/incomplete)                ;
+; emit_junk_op macro v1, opc, r1, r2                                            ;
+;     if v1 eq 0                                                                ;
+;         db s_pfx_rexw                                                         ;
+;         db opc                                                                ;
+;         b = r2                                                                ;
+;         b = (b shl 3) or (r1)                                                 ;
+;         db b                                                                  ;
+;     elseif v1 eq 1                                                            ;
+;         db opc                                                                ;
+;         b = r1                                                                ;
+;         b = (b shl 3) or (r2)                                                 ;
+;         db b                                                                  ;
+;     elseif v1 eq 2                                                            ;
+;         db opc                                                                ;
+;         b = r2                                                                ;
+;         b = (b shl 3) or (r1)                                                 ;
+;         db b                                                                  ;
+;     endif                                                                     ;
+; endm                                                                          ;
+;                                                                               ;
+; ; Emit a junk conditional comparison                                          ;
+; emit_junk_jcnd macro v, dist                                                  ;
+;     if v eq 0                                                                 ;
+;         db s_ja_rel8                                                          ;
+;         db dist                                                               ;
+;     elseif v eq 1                                                             ;
+;         db s_jle_rel8                                                         ;
+;         db dist                                                               ;
+;     elseif v eq 2                                                             ;
+;         db s_jne_rel8                                                         ;
+;         db dist                                                               ;
+;     endif                                                                     ;
+; endm                                                                          ;
+;                                                                               ;
+; ; Emit the bytes of a string                                                  ;
+; emit_bytes macro string                                                       ;
+;     for value, <string>                                                       ;
+;         db value                                                              ;
+;     endm                                                                      ;
+; endm                                                                          ;
+;                                                                               ;
+; ; Emit a relative 8 jump                                                      ;
+; emit_jmp_rel8 macro dist                                                      ;
+;     db s_jmp_rel8                                                             ;
+;     db dist                                                                   ;
+; endm                                                                          ;
+; ------------------------------------------------------------------------------;
