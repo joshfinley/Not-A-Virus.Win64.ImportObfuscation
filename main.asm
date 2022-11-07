@@ -21,21 +21,21 @@
 ; encode pointers at rest. Suddenly, automated tools like pe-sieve don't        ;
 ; work so well.                                                                 ;
 ;                                                                               ;
+; Another issue is the presence of most ordinary API hashes in online           ;
+; databases. We can avoid this by encoding our hashes at rest. Note that this   ;
+; will increase the overall entropy of the respective code blocks.              ;
+;                                                                               ;
 ; The developers of Blackmatter have taken this a step further and will         ;
 ; perform the encoding dynamically based on a runtime derived random value.     ;
 ; This example doesn't go so far, but it would be easily achievable             ;
 ; with the macros I've included here.                                           ;
 ;                                                                               ;
-; Another issue is the presence of most ordinary API hashes in online           ;
-; databases. We can avoid this by encoding our hashes at rest. Note that this   ;
-; will increase the overall entropy of the respective code blocks.              ;
-;                                                                               ;
 ; This program demonstrates how to achieve this in x86_64 masm (uasm) assembly. ;
 ; Similar results may be achieved with C++'s `decltype` and `constexpr`         ;
-; features and make use of variadic macro args to decode and call our function  ;
-; with minimal overhead, inserting the decoding operations into the call:       ;
+; features and by  use of variadic macro args to decode and call function       ;
+; pointers with minimal overhead. E.g.;                                         ;
 ; ---                                                                           ;
-; #define D_API( x )      decltype( &x ) x                                      ;
+; #define DYNIMP( x )      decltype( &x ) x                                     ;
 ; #define D_TYPE( x )     (decltype( &x ))                                      ;
 ; #define D_XOR_KEY       RND_XOR(0xffff)   // constexpr function call          ;
 ; #define D_EXEC( e, ... ) \                                                    ;
@@ -43,7 +43,7 @@
 ; ---                                                                           ;
 ; A more fleshed-out C++ example is included after the assembly listing.        ;
 ;                                                                               ;
-; Improvements to the overall approach migh include:                            ;
+; Improvements to the overall approach might include:                           ;
 ; - Some form of assemble/compile time polymorphism, as facilitated by the      ;
 ;   macros included at the bottom of this file.                                 ;
 ; - Dynamic encoding/decoding, e.g. Blackmatter ransomware.                     ;
@@ -85,14 +85,14 @@ hash_ntdll      equ            0x25959F7F xor random_mask                       
 hash_ntavm      equ            0x6973F2B4 xor random_mask                       ;
                                                                                 ;
 ; Data Structures ------------------------- ;                                   ;
-dapi_entry struct                           ; dynamic import table entry        ;
+dynimp_entry struct                         ; dynamic import table entry        ;
     address qword ?                         ; our encoded function pointer      ;
-dapi_entry ends                             ;                                   ;
+dynimp_entry ends                           ;                                   ;
                                             ;                                   ;
-dapi struct                                 ; our dynamic import table          ;
+dynimp struct                               ; our dynamic import table          ;
     entries qword ?                         ; pointer to entries                ;
     len     dword ?                         ; number of entries                 ;
-dapi ends                                   ;                                   ;
+dynimp ends                                 ;                                   ;
 ; ----------------------------------------- ;                                   ;
 ;                                                                               ;
 ; ----------------------------------------------------------------------------- ;
@@ -102,8 +102,8 @@ text segment align(10h) 'code' read execute ;                                   
 ;                                           ;                                   ;
 ; Program entry point                       ;                                   ;
 start proc                                  ;                                   ;
-    local   d_ents[10]:dapi_entry           ; encoded address on the stack      ;
-    local   d_table:dapi                    ; dynamic api table                 ;
+    local   d_ents[10]:dynimp_entry         ; encoded address on the stack      ;
+    local   d_table:dynimp                  ; dynamic api table                 ;
     mov     rcx, hash_ntdll                 ; encoded hash of `ntdll.dll`       ;
     call    getmod                          ; get module base of ntdll.dll      ;
     mov     rcx, rax                        ; rcx is the module base            ;
@@ -351,29 +351,29 @@ end                                         ;                                   
 ; ----------------------------------------------------------------------------- ;
 ;                  C++ - Obfuscated Dynamic Imports (Example)                   ;
 ; -----------------------------------c----------------------------------------- ;
-; #define D_API( x )      decltype( &x ) x
+; #define DYNIMP( x )      decltype( &x ) x
 ; #define D_TYPE( x )     (decltype( &x ))
 ; #define D_XOR_KEY       RND_XOR(0xffff)   // constexpr function call
 ;
 ; #define D_EXEC( e, ... ) \
 ;    ( ( decltype(e)((QWORD)(e) ^ D_XOR_KEY) )(__VA_ARGS__) )
 ;
-; typedef struct _DAPI_NTDLL
+; typedef struct _DYNIMP_NTDLL
 ; {
-;       D_API(NtAllocateVirtualMemory);
+;       DYNIMP(NtAllocateVirtualMemory);
 ;       ...
-; } DAPI_NTDLL, * PDAPI_NTDLL;
-; #define DAPI_NTDLL_LEN ( sizeof(DAPI_NTDLL) / sizeof(QWORD) )
+; } DYNIMP_NTDLL, * PDYNIMP_NTDLL;
+; #define DYNIMP_NTDLL_LEN ( sizeof(DYNIMP_NTDLL) / sizeof(QWORD) )
 ;
-; typedef struct _DAPI 
+; typedef struct _DYNIMP 
 ; {
 ;       union { 
-;           DAPI_NTDLL  Apis
-;           PVOID       Entries[DAPI_NTDLL_LEN];
+;           DYNIMP_NTDLL  Apis
+;           PVOID       Entries[DYNIMP_NTDLL_LEN];
 ;       } Ntdll;
-; } DAPI, * PDAPI;
+; } DYNIMP, * PDYNIMP;
 ;
-; VOID ResolveDapi(PDAPI Api)
+; VOID ResolveDapi(PDYNIMP Api)
 ; {
 ;       constexpr NtdllHash = ...;
 ;       constexpr FnvNtAllocateVirtualMemory = D_TYPE(NtAllocateVirtualMemory) 
