@@ -25,4 +25,4 @@ $(EXECUTABLE): $(OBJECTS)
 
 # clean folder
 clean:
-	rm main.err main.exe
+	rm main.err main.exe main.obj
