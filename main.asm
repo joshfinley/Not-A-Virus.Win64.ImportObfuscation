@@ -48,7 +48,7 @@
 ;   macros included at the bottom of this file.                                 ;
 ; - Dynamic encoding/decoding, e.g. Blackmatter ransomware.                     ;
 ;                                                                               ;
-;       ~ Enjoy!                                                                ;                                              ;
+;       ~ Enjoy!                                                                ;
 ; -------------------------------------------------------------- @__rdrand ---- ;
 option win64:0x08, casemap:none                                                 ;
 include win.inc                                                                 ;
