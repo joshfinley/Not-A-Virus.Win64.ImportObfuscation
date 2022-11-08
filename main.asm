@@ -426,17 +426,21 @@ find_bytes proc fastcall src:qword, buf:qword, len:dword
     mov     rdi, rdx
     mov     rbx, r8
     xor     r10, r10
-    xor     eax, eax
 _loop:
+    xor     eax, eax
     cmp     r10, rbx
     je      _done
     mov     rcx, rsi
     mov     rdx, rdi
+    inc     r10
+    inc     rsi
     mov     r8, rbx
     call    memcmp
     test    eax, eax
-    inc     r10
     jz      _loop
+_match:
+    dec     rsi
+    mov     rax, rsi
 _done:
     pop     r10
     pop     rdi
@@ -451,9 +455,9 @@ memcmp proc fastcall src:qword, dst:qword, len:dword
     push    rbx
     xor     r9, r9
 _loop:
-    xor     eax, eax
     cmp     r9, r8
     je      _done
+    xor     eax, eax
     mov     bl, [rcx+r9]
     cmp     [rdx+r9], bl
     jne     _done
