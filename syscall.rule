@@ -1,0 +1,6 @@
+rule syscall {
+    strings:
+        $syscall_bytes = { 0F 05 }
+    condition:
+        $syscall_bytes
+}

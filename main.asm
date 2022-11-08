@@ -23,36 +23,169 @@
 ;                                                                               ;
 ; Another issue is the presence of most ordinary API hashes in online           ;
 ; databases. We can avoid this by encoding our hashes at rest. Note that this   ;
-; will increase the overall entropy of the respective code blocks.              ;
+; will increase the overall entropy of the respective code blocks. We can       ;
+; get this entropy down by building up the hash over multiple instructions.     ;
 ;                                                                               ;
 ; The developers of Blackmatter have taken this a step further and will         ;
 ; perform the encoding dynamically based on a runtime derived random value.     ;
-; This example doesn't go so far, but it would be easily achievable             ;
-; with the macros I've included here.                                           ;
+; The code snippets for encoding/decoding the hashes are generated dynamically  ;
+; at runtime.                                                                   ;
 ;                                                                               ;
-; This program demonstrates how to achieve this in x86_64 masm (uasm) assembly. ;
-; Similar results may be achieved with C++'s `decltype` and `constexpr`         ;
-; features and by  use of variadic macro args to decode and call function       ;
-; pointers with minimal overhead. E.g.;                                         ;
-; ---                                                                           ;
-; #define DYNIMP( x )      decltype( &x ) x                                     ;
-; #define D_TYPE( x )     (decltype( &x ))                                      ;
-; #define D_XOR_KEY       RND_XOR(0xffff)   // constexpr function call          ;
-; #define D_EXEC( e, ... ) \                                                    ;
-;    ( ( decltype(e)((QWORD)(e) ^ D_XOR_KEY) )(__VA_ARGS__) )                   ;
-; ---                                                                           ;
-; A more fleshed-out C++ example is included after the assembly listing.        ;
+; We can be even more tricky and perform the allocations for code generation    ;
+; using ROP techniques. The syscall opcode (0F 05) is not uncommon in kernel32, ;
+; which is implicitly loaded into every usermode process.                       ;
 ;                                                                               ;
-; Improvements to the overall approach might include:                           ;
-; - Some form of assemble/compile time polymorphism, as facilitated by the      ;
-;   macros included at the bottom of this file.                                 ;
-; - Dynamic encoding/decoding, e.g. Blackmatter ransomware.                     ;
+; The combination of all these traits gives us a program which masks its        ;
+; imports effectively from memory scanners, doing so by masking the pointers    ;
+; and hashes it uses at runtime using polymorphic encoding stubs. Of course,    ;
+; all of these things are possible in C/C++, but I find the process of          ;
+; demonstrating code like this in assembly much more gratifying. With that      ;
+; being said, the rest of this file contains such a demonstration in the        ;
+; MASM syntax, which can be assembled with UASM.                                ;
 ;                                                                               ;
 ;       ~ Enjoy!                                                                ;
 ;                                                                               ;
 ; -------------------------------------------------------------- yesh --------- ;
 option win64:0x08, casemap:none                                                 ;
 include win.inc                                                                 ;
+; ----------------------------------------------------------------------------- ;
+;                              Obfuscation Macros                               ;
+; ----------------------------------------------------------------------------- ;
+; x86 registers                                                                 ;
+_eax            equ 0                                                           ;
+_ecx            equ 1                                                           ;
+_edx            equ 2                                                           ;
+_ebx            equ 3                                                           ;
+_esp            equ 4                                                           ;
+_ebp            equ 5                                                           ;
+_esi            equ 6                                                           ;
+_edi            equ 7                                                           ;
+                                                                                ;
+; x64 extended registers                                                        ;
+_r8             equ 0                                                           ;
+_r9             equ 1                                                           ;
+_r10            equ 2                                                           ;
+_r11            equ 3                                                           ;
+_r12            equ 4                                                           ;
+_r13            equ 5                                                           ;
+_r14            equ 6                                                           ;
+_r15            equ 7                                                           ;
+                                                                                ;
+; MODRM                                                                         ;
+S_mod_ri        equ 00000000b               ; 0x00 MODRM register indirect      ;
+s_mod_ra        equ 11000000b               ; 0xC0 MODRM register addressing    ;
+s_mod_1sbdsp    equ 01000000b               ; 0x40 MODRM one byte signed disp   ;
+s_mod_4sbdsp    equ 10000000b               ; 0x80 MODRM four byte signed disp  ;
+                                                                                ;
+; Prefixes                                                                      ;
+s_pfx_o16       equ 01100110b               ; 0x66 16/32 bit operand override   ;
+s_pfx_a16       equ 01100111b               ; 0x67 16/32 bit address override   ;
+s_pfx_o8        equ 10001000b               ; 0x88 8 bit operand override       ;
+s_rex           equ 01000000b               ; 0x40 REX (access new 8 bit regы)  ;
+s_rex_8         equ 01000001b               ; 0x41 REX reg imm mode             ;
+s_pfx_rexw      equ 01001000b               ; 0x48 REX.W (64 bit operand)       ;
+s_pfx_rexwb     equ 01001001b               ; 0x49 REX.WB                       ;
+                                                                                ;
+; Opcodes                                                                       ;
+s_op_pushr      equ 0x50                    ; push rax. OR with reg encodings.  ;
+s_op_popr       equ 0x58                    ; pop rax. OR with reg encodings    ;
+                                                                                ;
+; Conditional Jumps                                                             ;
+s_jb_rel8       equ 0x72                    ; jb/jnae/jc                        ;
+s_jae_rel8      equ 0x73                    ; jnb/jae/jnc                       ;
+s_je_rel8       equ 0x74                    ; jz/ne                             ;
+s_jne_rel8      equ 0x75                    ; jnz/jne                           ;
+s_jna_rel8      equ 0x76                    ; jbe/jna                           ;
+s_ja_rel8       equ 0x77                    ; jnbe/ja                           ;
+s_jnge_rel8     equ 0x7c                    ; jl/jnge                           ;
+s_jd_rel8       equ 0x7d                    ; jnl/jge                           ;
+s_jle_rel8      equ 0x7e                    ; jle/jng                           ;
+s_jf_rel8       equ 0x7f                    ; jnle/jg                           ;
+                                                                                ;
+; Relative Jumps                                                                ;
+s_jmp_rel8      equ 0xeb                    ; jmp rel8                          ;
+                                                                                ;
+; Basic Register Operations                                                     ;
+s_add_rall      equ 0x03                    ; add r/16/32/64                    ;
+s_or_rall       equ 0x0b                    ; or  r/16/32/64                    ;
+s_and_rall      equ 0x23                    ; and r/16/32/64                    ;
+s_sub_rall      equ 0x2b                    ; sub r/16/32/64                    ;
+s_xor_rall      equ 0x33                    ; xor r/16/32/64                    ;
+s_cmp_rall      equ 0x3b                    ; cmp r/16/32/64                    ;
+s_mov_rall      equ 0x8b                    ; mov r/16/32/64                    ;
+s_mov_r8_imm8   equ 0xb0                    ; mov r8 imm8                       ;
+s_mov_r8        equ 0x8a                    ; mov r8 r/m8                       ;
+s_mov_r8_imm    equ 0xb8                    ; mov r8 imm8                       ;
+s_mov_r64_imm64 equ 0xC7                    ; mov r64 imm64                     ;
+s_shl           equ 0xe0c1                  ; shl                               ;
+                                                                                ;
+; Get an assembly-time random value of a specific size. Maximum 32 bits.        ;
+; This value will change on successive expansions                               ;
+rnd macro __mask                                                                ;
+    local m                                                                     ;
+    m=(@SubStr(%@Time,7,2)+@Line)*(@SubStr(%@Date,1,2)                          ;
+    m=m+@SubStr(%@Date,4,2)*100+@SubStr(%@Date,7,2))* (-1001)                   ;
+    m=(m+@SubStr(%@Time,1,2)+@SubStr(%@Time,4,2))*(@SubStr(%@Time,7,2)+1)       ;
+    ifnb <__mask>                                                               ;
+        m = m and __mask                                                        ;
+    endif                                                                       ;
+    exitm % m                                                                   ;
+endm                                                                            ;
+                                                                                ;
+; Emit some junk bytes that look vaguely like real code                         ;
+emit_junk macro                                                                 ;
+    local v1, v2, r0, r1, r2, r3, r4, b                                         ;
+    count = 0                                                                   ;
+    ...                                                                         ;
+endm                                                                            ;
+                                                                                ;
+; Emit a junk operation of the given type (example/incomplete)                  ;
+emit_junk_op macro v1, opc, r1, r2                                              ;
+    if v1 eq 0                                                                  ;
+        db s_pfx_rexw                                                           ;
+        db opc                                                                  ;
+        b = r2                                                                  ;
+        b = (b shl 3) or (r1)                                                   ;
+        db b                                                                    ;
+    elseif v1 eq 1                                                              ;
+        db opc                                                                  ;
+        b = r1                                                                  ;
+        b = (b shl 3) or (r2)                                                   ;
+        db b                                                                    ;
+    elseif v1 eq 2                                                              ;
+        db opc                                                                  ;
+        b = r2                                                                  ;
+        b = (b shl 3) or (r1)                                                   ;
+        db b                                                                    ;
+    endif                                                                       ;
+endm                                                                            ;
+                                                                                ;
+; Emit a junk conditional comparison                                            ;
+emit_junk_jcnd macro v, dist                                                    ;
+    if v eq 0                                                                   ;
+        db s_ja_rel8                                                            ;
+        db dist                                                                 ;
+    elseif v eq 1                                                               ;
+        db s_jle_rel8                                                           ;
+        db dist                                                                 ;
+    elseif v eq 2                                                               ;
+        db s_jne_rel8                                                           ;
+        db dist                                                                 ;
+    endif                                                                       ;
+endm                                                                            ;
+                                                                                ;
+; Emit the bytes of a string                                                    ;
+emit_bytes macro string                                                         ;
+    for value, <string>                                                         ;
+        db value                                                                ;
+    endm                                                                        ;
+endm                                                                            ;
+                                                                                ;
+; Emit a relative 8 jump                                                        ;
+emit_jmp_rel8 macro dist                                                        ;
+    db s_jmp_rel8                                                               ;
+    db dist                                                                     ;
+endm                                                                            ;
 ; ----------------------------------------------------------------------------- ;
 ;                           Dynamic Import Macros                               ;
 ; ----------------------------------------------------------------------------- ;
@@ -100,11 +233,16 @@ dynimp ends                                 ;                                   
 ;                               Executable Code                                 ;
 ; ----------------------------------------------------------------------------- ;
 text segment align(10h) 'code' read execute ;                                   ;
+db 0x0F, 0x05
 ;                                           ;                                   ;
 ; Program entry point                       ;                                   ;
 start proc                                  ;                                   ;
     local   d_ents[10]:dynimp_entry         ; encoded address on the stack      ;
     local   d_table:dynimp                  ; dynamic api table                 ;
+    lea     rcx, start-2
+    lea     rdx, _syscall
+    mov     r8, 2
+    call    find_bytes
     mov     rcx, hash_ntdll                 ; encoded hash of `ntdll.dll`       ;
     call    getmod                          ; get module base of ntdll.dll      ;
     mov     rcx, rax                        ; rcx is the module base            ;
@@ -118,6 +256,8 @@ start proc                                  ;                                   
     mov     rcx, rax                        ; rcx is the encoded address        ;
     call    mask_ptr                        ; decode the address                ;
     ret                                     ; in this way, you can gather as    ;
+_syscall:
+    syscall
     ;                                       ; many function addresses as you    ;
     ;                                       ; like...                           ;
 start endp                                  ;                                   ;
@@ -275,6 +415,57 @@ _done:                                      ;                                   
     pop     rbx                             ;                                   ;
     retn                                    ;                                   ;
 gethash endp                                ;                                   ;
+; ----------------------------------------- ;
+; Find matching bytes in memory
+find_bytes proc fastcall src:qword, buf:qword, len:dword 
+    push    rbx
+    push    rsi
+    push    rdi
+    push    r10
+    mov     rsi, rcx
+    mov     rdi, rdx
+    mov     rbx, r8
+    xor     r10, r10
+    xor     eax, eax
+_loop:
+    cmp     r10, rbx
+    je      _done
+    mov     rcx, rsi
+    mov     rdx, rdi
+    mov     r8, rbx
+    call    memcmp
+    test    eax, eax
+    inc     r10
+    jz      _loop
+_done:
+    pop     r10
+    pop     rdi
+    pop     rsi
+    pop     rbx
+    ret
+find_bytes endp
+
+; ----------------------------------------- ;
+; Generic memcpy
+memcmp proc fastcall src:qword, dst:qword, len:dword
+    push    rbx
+    xor     r9, r9
+_loop:
+    xor     eax, eax
+    cmp     r9, r8
+    je      _done
+    mov     bl, [rcx+r9]
+    cmp     [rdx+r9], bl
+    jne     _done
+_match:
+    mov     eax, 1
+    inc     r9
+    jmp     _loop
+_done:
+    pop     rbx
+    ret
+memcmp endp
+
 ; ----------------------------------------- ;                                   ;
 ; Generic memset                            ;                                   ;
 memset proc fastcall dst:qword, val:byte, len:dword                             ;
@@ -389,142 +580,4 @@ end                                         ;                                   
 ; 
 ; D_EXEC(Api->Ntdll.Entries[idx], args...);
 ;
-; ----------------------------------------------------------------------------- ;
-;                       Future Work - Obfuscation Macros                        ;
-; ----------------------------------------------------------------------------- ;
-; ; x86 registers                                                               ;
-; _eax            equ 0                                                         ;
-; _ecx            equ 1                                                         ;
-; _edx            equ 2                                                         ;
-; _ebx            equ 3                                                         ;
-; _esp            equ 4                                                         ;
-; _ebp            equ 5                                                         ;
-; _esi            equ 6                                                         ;
-; _edi            equ 7                                                         ;
-;                                                                               ;
-; ; x64 extended registers                                                      ;
-; _r8             equ 0                                                         ;
-; _r9             equ 1                                                         ;
-; _r10            equ 2                                                         ;
-; _r11            equ 3                                                         ;
-; _r12            equ 4                                                         ;
-; _r13            equ 5                                                         ;
-; _r14            equ 6                                                         ;
-; _r15            equ 7                                                         ;
-;                                                                               ;
-; ; MODRM                                                                       ;
-; S_mod_ri        equ 00000000b             ; 0x00 MODRM register indirect      ;
-; s_mod_ra        equ 11000000b             ; 0xC0 MODRM register addressing    ;
-; s_mod_1sbdsp    equ 01000000b             ; 0x40 MODRM one byte signed disp   ;
-; s_mod_4sbdsp    equ 10000000b             ; 0x80 MODRM four byte signed disp  ;
-;                                                                               ;
-; ; Prefixes                                                                    ;
-; s_pfx_o16       equ 01100110b             ; 0x66 16/32 bit operand override   ;
-; s_pfx_a16       equ 01100111b             ; 0x67 16/32 bit address override   ;
-; s_pfx_o8        equ 10001000b             ; 0x88 8 bit operand override       ;
-; s_rex           equ 01000000b             ; 0x40 REX (access new 8 bit regы)  ;
-; s_rex_8         equ 01000001b             ; 0x41 REX reg imm mode             ;
-; s_pfx_rexw      equ 01001000b             ; 0x48 REX.W (64 bit operand)       ;
-; s_pfx_rexwb     equ 01001001b             ; 0x49 REX.WB                       ;
-;                                                                               ;
-; ; Opcodes                                                                     ;
-; s_op_pushr      equ 0x50                  ; push rax. OR with reg encodings.  ;
-; s_op_popr       equ 0x58                  ; pop rax. OR with reg encodings    ;
-;                                                                               ;
-; ; Conditional Jumps                                                           ;
-; s_jb_rel8       equ 0x72                  ; jb/jnae/jc                        ;
-; s_jae_rel8      equ 0x73                  ; jnb/jae/jnc                       ;
-; s_je_rel8       equ 0x74                  ; jz/ne                             ;
-; s_jne_rel8      equ 0x75                  ; jnz/jne                           ;
-; s_jna_rel8      equ 0x76                  ; jbe/jna                           ;
-; s_ja_rel8       equ 0x77                  ; jnbe/ja                           ;
-; s_jnge_rel8     equ 0x7c                  ; jl/jnge                           ;
-; s_jd_rel8       equ 0x7d                  ; jnl/jge                           ;
-; s_jle_rel8      equ 0x7e                  ; jle/jng                           ;
-; s_jf_rel8       equ 0x7f                  ; jnle/jg                           ;
-;                                                                               ;
-; ; Relative Jumps                                                              ;
-; s_jmp_rel8      equ 0xeb                  ; jmp rel8                          ;
-;                                                                               ;
-; ; Basic Register Operations                                                   ;
-; s_add_rall      equ 0x03                  ; add r/16/32/64                    ;
-; s_or_rall       equ 0x0b                  ; or  r/16/32/64                    ;
-; s_and_rall      equ 0x23                  ; and r/16/32/64                    ;
-; s_sub_rall      equ 0x2b                  ; sub r/16/32/64                    ;
-; s_xor_rall      equ 0x33                  ; xor r/16/32/64                    ;
-; s_cmp_rall      equ 0x3b                  ; cmp r/16/32/64                    ;
-; s_mov_rall      equ 0x8b                  ; mov r/16/32/64                    ;
-; s_mov_r8_imm8   equ 0xb0                  ; mov r8 imm8                       ;
-; s_mov_r8        equ 0x8a                  ; mov r8 r/m8                       ;
-; s_mov_r8_imm    equ 0xb8                  ; mov r8 imm8                       ;
-; s_mov_r64_imm64 equ 0xC7                  ; mov r64 imm64                     ;
-; s_shl           equ 0xe0c1                ; shl                               ;
-;                                                                               ;
-; ; Get an assembly-time random value of a specific size. Maximum 32 bits.      ;
-; ; This value will change on successive expansions                             ;
-; rnd macro __mask                                                              ;
-;     local m                                                                   ;
-;     m=(@SubStr(%@Time,7,2)+@Line)*(@SubStr(%@Date,1,2)                        ;
-;     m=m+@SubStr(%@Date,4,2)*100+@SubStr(%@Date,7,2))* (-1001)                 ;
-;     m=(m+@SubStr(%@Time,1,2)+@SubStr(%@Time,4,2))*(@SubStr(%@Time,7,2)+1)     ;
-;     ifnb <__mask>                                                             ;
-;         m = m and __mask                                                      ;
-;     endif                                                                     ;
-;     exitm % m                                                                 ;
-; endm                                                                          ;
-;                                                                               ;
-; ; Emit some junk bytes that look vaguely like real code                       ;
-; emit_junk macro                                                               ;
-;     local v1, v2, r0, r1, r2, r3, r4, b                                       ;
-;     count = 0                                                                 ;
-;     ...                                                                       ;
-; endm                                                                          ;
-;                                                                               ;
-; ; Emit a junk operation of the given type (example/incomplete)                ;
-; emit_junk_op macro v1, opc, r1, r2                                            ;
-;     if v1 eq 0                                                                ;
-;         db s_pfx_rexw                                                         ;
-;         db opc                                                                ;
-;         b = r2                                                                ;
-;         b = (b shl 3) or (r1)                                                 ;
-;         db b                                                                  ;
-;     elseif v1 eq 1                                                            ;
-;         db opc                                                                ;
-;         b = r1                                                                ;
-;         b = (b shl 3) or (r2)                                                 ;
-;         db b                                                                  ;
-;     elseif v1 eq 2                                                            ;
-;         db opc                                                                ;
-;         b = r2                                                                ;
-;         b = (b shl 3) or (r1)                                                 ;
-;         db b                                                                  ;
-;     endif                                                                     ;
-; endm                                                                          ;
-;                                                                               ;
-; ; Emit a junk conditional comparison                                          ;
-; emit_junk_jcnd macro v, dist                                                  ;
-;     if v eq 0                                                                 ;
-;         db s_ja_rel8                                                          ;
-;         db dist                                                               ;
-;     elseif v eq 1                                                             ;
-;         db s_jle_rel8                                                         ;
-;         db dist                                                               ;
-;     elseif v eq 2                                                             ;
-;         db s_jne_rel8                                                         ;
-;         db dist                                                               ;
-;     endif                                                                     ;
-; endm                                                                          ;
-;                                                                               ;
-; ; Emit the bytes of a string                                                  ;
-; emit_bytes macro string                                                       ;
-;     for value, <string>                                                       ;
-;         db value                                                              ;
-;     endm                                                                      ;
-; endm                                                                          ;
-;                                                                               ;
-; ; Emit a relative 8 jump                                                      ;
-; emit_jmp_rel8 macro dist                                                      ;
-;     db s_jmp_rel8                                                             ;
-;     db dist                                                                   ;
-; endm                                                                          ;
 ; ------------------------------------------------------------------------------;
