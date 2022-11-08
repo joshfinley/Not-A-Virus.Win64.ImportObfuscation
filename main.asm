@@ -233,33 +233,27 @@ dynimp ends                                 ;                                   
 ;                               Executable Code                                 ;
 ; ----------------------------------------------------------------------------- ;
 text segment align(10h) 'code' read execute ;                                   ;
-db 0x0F, 0x05
 ;                                           ;                                   ;
 ; Program entry point                       ;                                   ;
 start proc                                  ;                                   ;
     local   d_ents[10]:dynimp_entry         ; encoded address on the stack      ;
     local   d_table:dynimp                  ; dynamic api table                 ;
-    lea     rcx, start-2
-    lea     rdx, _syscall
-    mov     r8, 2
-    call    find_bytes
+    push    rbx
     mov     rcx, hash_ntdll                 ; encoded hash of `ntdll.dll`       ;
     call    getmod                          ; get module base of ntdll.dll      ;
     mov     rcx, rax                        ; rcx is the module base            ;
+    mov     rbx, rax
     mov     rdx, hash_ntavm                 ; rdx encoded function hash         ;
     call    getexp                          ; resolve address by hash           ;
     mov     edx, [d_table.len]              ; store the result in the table     ;
     inc     [d_table.len]                   ;                                   ;
     mov     rcx, rax                        ; rcx is the unencoded address      ;
-    call    mask_ptr                        ; encode the address                ;
-    mov     [d_table.entries + rdx * 8], rax; store the encoded address         ;
-    mov     rcx, rax                        ; rcx is the encoded address        ;
-    call    mask_ptr                        ; decode the address                ;
-    ret                                     ; in this way, you can gather as    ;
-_syscall:
-    syscall
-    ;                                       ; many function addresses as you    ;
-    ;                                       ; like...                           ;
+    mov     rcx, rbx
+    mov     rdx, 0x69696969
+    call    getexp
+    ret                                     ; 
+    ;                                       ; 
+    ;                                       ; 
 start endp                                  ;                                   ;
 ;                                           ;                                   ;
 ; Address masking operations                ;                                   ;
@@ -282,16 +276,14 @@ mask_ptr endp                               ;                                   
 ; ----------------------------------------- ;                                   ;
 ; Resolve a DLL export by hash              ;                                   ;
 getexp proc fastcall base:qword, hash:qword ;                                   ;
-    local   nth:qword                       ; nt headers                        ;
-    local   dir:qword                       ; data directory                    ;
-    local   exp:qword                       ; export directory                  ;
-    local   aof:qword                       ; address of function               ;
-    local   aon:qword                       ; address of name                   ;
-    local   aoo:qword                       ; address of name ordinal           ;
-    push    rbx                             ;                                   ;
-    push    rsi                             ;                                   ;
-    push    rdi                             ;                                   ;
-    push    r10                             ;                                   ;
+    push    rbx
+    push    rsi
+    push    rdi
+    push    r10
+    push    r11
+    push    r12
+    push    r13
+    push    r14
     xor     eax, eax                        ; eax is offset holder              ;
     mov     rsi, rcx                        ; rsi is the module base            ;
     mov     r10, rsi                        ; r10 is a backup of the mod base   ;
@@ -299,23 +291,22 @@ getexp proc fastcall base:qword, hash:qword ;                                   
     mov     eax, [rsi].dos_hdr.e_lfanew     ; eax is nth offset                 ;
     add     rsi, rax                        ; rsi is the nt header va           ;
     lea     rsi, [rsi].nt_hdr.opt.d_dir     ; rsi is the rva of the data dir    ;
-    mov     dir, rsi                        ; store the address                 ;
     mov     ebx, [rsi].img_data_dir.va      ; rbx is the va of the export dir   ;
     add     rbx, r10                        ; rbx is the va of export dir       ;
-    mov     exp, rbx                        ; store the va of the export dir    ;
     mov     eax, [rbx].exp_dir.aon          ; resolve AddressOfNames            ;
     add     rax, r10                        ;                                   ;
-    mov     aon, rax                        ;                                   ;
+    mov     r12, rax                        ;                                   ;
     mov     eax, [rbx].exp_dir.aof          ; resolve AddressOfFunctions        ;
     add     rax, r10                        ;                                   ;
-    mov     aof, rax                        ;                                   ;
+    mov     r13, rax                        ;                                   ;
     mov     eax, [rbx].exp_dir.aoo          ; resolve ordinals                  ;
-    mov     rbx, [exp]                      ;                                   ;
+    add     rax, rsi
+    mov     r14, rax
     xor     esi, esi                        ; esi is the counter                ;
 _loop:                                      ; iterate over the exports          ;
     cmp     esi, [rbx].exp_dir.n_names      ;                                   ;
     jge     _done                           ;                                   ;
-    mov     rcx, [aon]                      ; aon                               ;
+    mov     rcx, r12                        ; aon                               ;
     mov     ecx, [rcx+rsi*4]                ; next offset                       ;
     add     rcx, r10                        ; next va                           ;
     mov     rbx, rcx                        ; rcd is va of string               ;
@@ -329,17 +320,21 @@ _loop:                                      ; iterate over the exports          
     jmp     _loop                           ; next function                     ;
 _match:                                     ;                                   ;
     xor     eax, eax                        ; resolve the function address      ;
-    mov     rcx, aoo                        ; get current ordinal               ;
+    mov     rcx, r14                        ; get current ordinal               ;
     movzx   eax, word ptr [rcx+rsi*2]       ;                                   ;
-    mov     rcx, aof                        ;                                   ;
+    mov     rcx, r13                        ;                                   ;
     mov     eax, [rcx+rsi*4]                ; get current function rva          ;
     add     rax, r10                        ; get current function va           ;
     jmp     _done                           ; all done here                     ;
 _done:                                      ;                                   ;
-    pop     r10                             ;                                   ;
-    pop     rdi                             ;                                   ;
-    pop     rsi                             ;                                   ;
-    pop     rbx                             ;                                   ;
+    pop     r14
+    pop     r13
+    pop     r12
+    pop     r11
+    pop     r10
+    pop     rdi
+    pop     rsi
+    pop     rbx
     retn                                    ;                                   ;
 getexp endp                                 ;                                   ;
 ; ----------------------------------------- ;                                   ;
@@ -348,9 +343,12 @@ getmod proc fastcall hash:qword             ;                                   
     local   modname[256*2]:byte             ; stack space for module name buf   ;
     local   first:qword                     ; first module entry                ;
     local   curr:qword                      ; current module entry              ;
-    push    rbx                             ;                                   ;
-    push    rsi                             ;                                   ;
-    push    rdi                             ;                                   ;
+    local   brbx:qword
+    local   brsi:qword
+    local   brdi:qword
+    mov     brbx, rbx
+    mov     brsi, rsi
+    mov     brdi, rdi
     mov     rdi, rcx                        ;                                   ;
     mov     rsi, [gs:0x60]                  ; get PEB                           ;
     mov     rsi, [rsi].peb.ldr              ; rsi -> PEB_LDR_DATA entry         ;
@@ -381,9 +379,9 @@ _loop:                                      ; loop over modules                 
 _match:                                     ;                                   ;
     mov     rax, [rbx].ldte.dllbase         ; get dll base address              ;
 _done:                                      ;                                   ;
-    pop     rdi                             ;                                   ;
-    pop     rsi                             ;                                   ;
-    pop     rbx                             ;                                   ;
+    mov     rdi, brdi
+    mov     rsi, brsi
+    mov     rbx, brbx
     retn                                    ;                                   ;
 getmod endp                                 ;                                   ;
 ; ----------------------------------------- ;                                   ;
