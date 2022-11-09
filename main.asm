@@ -1,10 +1,7 @@
-; TODO: Rewrite everything to use locals (to avoid stack issues) OR
-;         write prolog and epilog macros that dynamically save non-volatile
-;         fastcall registers (http://masm32.com/board/index.php?topic=5850.0)
-;
 ; TODO: Improve random generation using cli passed macro/definition
 ; TODO: Add runtime polymorphism constructs (shuffle register table), macros    
 ; TODO: Generic WINAPI Wrapper with automated prototypes (regular includes?)
+; TODO: Macros to obfuscate embedded hashes (dynamically generate)
 ;
 ;
 ; <main.asm>    -   Import Obfuscation Demonstration                            ;
@@ -133,8 +130,8 @@ s_shl           equ 0xe0c1                  ; shl                               
 ; credit to mabdelouahab@masm32.com                                             ;
 rnd macro __mask                                                                ;
     local m                                                                     ;
-    m=(@SubStr(%@Time,7,2)+@Line)*(@SubStr(%@Date,1,2)                          ;
-    m=m+@SubStr(%@Date,4,2)*100+@SubStr(%@Date,7,2))* (-1001)                   ;
+    m=(@SubStr(%@Time,7,2)+@Line)*(@SubStr(%@Date,1,2))                         ;
+    m=(m+@SubStr(%@Date,4,2)*100+@SubStr(%@Date,7,2))* (-1001)                   ;
     m=(m+@SubStr(%@Time,1,2)+@SubStr(%@Time,4,2))*(@SubStr(%@Time,7,2)+1)       ;
     ifnb <__mask>                                                               ;
         m = m and __mask                                                        ;
@@ -155,6 +152,43 @@ emit_jmp_rel8 macro dist                                                        
     db dist                                                                     ;
 endm                                                                            ;
 
+dword_hi macro val
+    local p
+    p = ((val) and 0xffff0000)
+    exitm % p
+endm
+
+dword_lo macro val
+    local p
+    p = ((val) and 0x0000ffff)
+    exitm % p
+endm
+
+sethash macro reg, hash
+    local   choice 
+    choice  = (rnd(0x03))
+    if choice eq 0
+        echo 0
+        mov     reg, dword_hi(hash)
+        or      reg, dword_lo(hash)
+        mov     reg, hash
+    elseif choice eq 1
+        echo 1
+        xor     reg, reg
+        mov     reg, (dword_hi(hash) shr 8)
+        shl     reg, 8
+        and     reg, reg
+        or      reg, dword_lo(hash)
+    elseif choice eq 2
+        echo 2
+        mov     reg, (hash xor choice)
+        xor     reg, choice
+    elseif choice eq 3
+        echo 3
+        mov     reg, hash
+    endif
+endm
+
 ; ----------------------------------------------------------------------------- ;
 ;                           Dynamic Import Macros                               ;
 ; ----------------------------------------------------------------------------- ;
@@ -167,7 +201,8 @@ endm                                                                            
 ;                                                                               ;
 static_rnd macro __mask                                                         ;
     local m                                                                     ;
-    m=(@SubStr(%@Time,7,2)) xor (@SubStr(%@Date,7,2))                           ;
+    m=(@SubStr(%@Time,7,2))*(@SubStr(%@Date,1,2))                         ;
+    m=(m+@SubStr(%@Date,4,2)*100+@SubStr(%@Date,7,2))* (-1001)                   ;
     m=(m+@SubStr(%@Time,1,2)+@SubStr(%@Time,4,2))*(@SubStr(%@Time,7,2)+1)       ;
     ifnb <__mask>                                                               ;
         m = m and __mask                                                        ;
@@ -185,8 +220,13 @@ hash_prime      equ            0x01000193  xor random_mask                      
 ;                                                                               ;
 hash_ntdll      equ            0x25959F7F xor random_mask                       ;
 hash_ntavm      equ            0x6973F2B4 xor random_mask                       ;
-hash_ntpvm      equ            0x4c8bd1b8 xor random_mask                       ;
-                              
+hash_ntpvm      equ            0xB7F40932 xor random_mask                       ;
+hash_k32        equ            0x00000000 xor random_mask   
+hash_cfw        equ            0x00000000 xor random_mask   ; CreateFileW
+hash_gcd        equ            0x00000000 xor random_mask   ; GetCurrentDirec.
+hash_fff        equ            0x00000000 xor random_mask   ; FindFirstFile
+hash_fnf        equ            0x00000000 xor random_mask
+
 ;
 ; Data structures
 ;
@@ -195,64 +235,102 @@ dynimp struct                               ; our dynamic import table          
     ntpvm   qword ?
     len     dword ?                         ; number of entries                 ;
 dynimp ends                                                                     ;
-                                                                                
-setup_syscalls proto :qword
-clobber_rdi proto :qword
+
+;
+; Function Prototypes
+;                                                                             
+setup_syscalls  proto :qword
+find_bytes      proto :qword, :qword, :qword, :qword
 ;                                                                               ;
 ; ----------------------------------------------------------------------------- ;
 ;                               Executable Code                                 ;
 ; ----------------------------------------------------------------------------- ;
-text segment align(10h) 'code' read execute ;                                   ;
-; Pseudo-data section
-data:
-syscall_stub_sig:
-    db 0x4c, 0x8B, 0xD1, 0xB8        
+text segment align(16) 'code' read execute ;                                   ;
 
-end_data:
-
-;                                           ;                                   ;
-; Program entry point                       ;                                   ;
+; ----------------------------------------------------------------------------- ;
+;                                Entry Point                                    ;
+; ----------------------------------------------------------------------------- ;
+;
+; The approach here is similar to the BlackMatter ransomware implementation.
+; We not only  encode our dynamic imports at rest, and wrap them in code to
+; decode them before use, but we generate the decoding routines per function,
+; at runtime. To make this possible, we'll need to allocate some memory.
+;
+; We'll need only NtAllocateVirtualMemory and NtProtectVirtualMemory. To avoid
+; hooks, we will check the first four bytes for a known legit signature. If its
+; found, we continue and just use the function pointer to invoke the syscall.
+; Otherwise, the syscall number will be set in the dynamic import table instead
+;
+; Our syscall invocation wrapper will take care of figuring out which variant
+; to use.
+;
+; Next, we loop over the dynamic imports, resolve the target functions, and
+; generate a reversible encoding/decoding routine for each target using the
+; syscalls we resolved earlier. A random key is generated at runtime and
+; embedded into each new cipher stub. The pointers in the dynamic import
+; table will then be set to the new stub routine. From here, we can just
+; call whichever functions we need like normal, and our stubs will handle
+; the rest.
+;
 start proc fastcall
     local   dimp:dynimp
-    ; push    rbx
-    ; push    rsi
-    ; push    r10
-    mov     rcx, dimp
-    invoke setup_syscalls, rcx
-    invoke clobber_rdi, rcx
-    ; pop     r10
-    ; pop     rsi
-    ; pop     rbx
-    ret   
-start endp                           
 
-clobber_rdi@8 proc arg:qword
-    local dst:qword
-    mov dst, arg
+    sethash rax, hash_ntavm
+    mov     rcx, dimp
+    invoke  setup_syscalls, rcx
+
+    ret   
+start endp
+
+; Iterate over imports, resolve pointers, and generate encoding stubs
+genimps proc dimp:qword
     ret
-clobber_rdi@8 endp
+genimps endp
+
+; Generate a unique cipher stub for the address
+genstub proc p_api:qword
+    ret
+genstub endp
 
 setup_syscalls proc dimp:qword
-    ; push    rsi
-    ; push    rdi
+    local   @rbx:qword
+    local   @rsi:qword
+    local   @rdi:qword
+    mov     @rbx, rbx
+    mov     @rsi, rsi
+    mov     @rdi, rdi
     mov     rdi, rcx
-    mov     rcx, hash_ntdll                 ; encoded hash of `ntdll.dll`       ;
+    sethash rcx, hash_ntdll                 ; encoded hash of `ntdll.dll`       ;
+   ;mov     rcx, hash_ntdll                 
     call    getmod                          ; get module base of ntdll.dll      ;
     mov     rsi, rax                        ; save ntdll base                   ;
-    mov     rcx, rax                        ; rcx is the module base            ;     
-    mov     rdx, hash_ntavm                 ; rdx encoded function hash         ;
+    mov     rcx, rax                        ; rcx is the module base            ;
+    sethash rdx, hash_ntavm     
+   ;mov     rdx, hash_ntavm                 ; rdx encoded function hash         ;
     call    getexp                          ; resolve address by hash           ;
     mov     rcx, rax                        ; pass NtAllocateVirtualMemory addr ;
-    call    getscn                          ; get syscall number/address        ;
+    call    validate_scn                    ; get syscall number/address        ;
+    test    eax, eax
+    jnz     _set_ntavm          
+    mov     eax, 0x18                       ; raw value is same across win10    ;
+_set_ntavm:
     xor     rax, random_mask                ; encode it                         ;
-    mov     [rdi].dynimp.ntavm, rax         ; store in dynamic import table     ;
+    mov     [dimp].dynimp.ntavm, rax        ; store in dynamic import table     ;
     mov     rcx, rsi                        ; reload ntdll base                 ;
-    mov     rdx, hash_ntpvm                 ; NtProtectVirtualMemory hash       ;
+    sethash rdx, hash_ntpvm
+   ;mov     rdx, hash_ntpvm                 ; NtProtectVirtualMemory hash       ;
     call    getexp                          ; resolve ntpvm by hash             ;
     mov     rcx, rax                        ; pass NtProtectVirtualMemory addr  ;
-    call    getscn                          ; get syscall number/address        ;
-    ; pop     rdi
-    ; pop     rsi
+    call    validate_scn                    ; get syscall number/address        ;
+    test    eax, eax
+    jnz     _set_ntpvm
+    mov     eax, 0x50                       ; raw value is same across win10    ;
+_set_ntpvm:
+    xor     rax, random_mask                ; encode it                         ;
+    mov     [dimp].dynimp.ntpvm, rax        ; store in dynamic import table     ;
+    mov     rbx, @rbx
+    mov     rsi, @rsi                   
+    mov     rdi, @rdi
     ret
 setup_syscalls endp
 
@@ -277,32 +355,44 @@ exec_syscall ENDP
 ; If a jump is found, its likely the syscall is hooked. This not only means
 ; we have detection to worry about, but it complicates syscall resolution.
 ;
-; The caller has to account for this in case getscn returns 0
+; The caller has to account for this in case validate_scn returns 0
 ;
-getscn proc address:qword
+validate_scn proc 
+    ; xor     eax, eax
+    ; mov     rdx, syscall_stub_sig
+    ; mov     r8, 4
+    ; call    find_bytes                      ; search for 4C 8B D1 D8
+    ; test    eax, eax      
     xor     eax, eax
     mov     rdx, syscall_stub_sig
     mov     r8, 4
-    call    find_bytes                      ; search for 4C 8B D1 D8
+    mov     r9, r8
+    invoke  find_bytes, rcx, rdx, r8, r9
     test    eax, eax                        
-    jnz     _done                           ; signature not found - hook likely ;
-    add     rax, 4
-    mov     eax, [rax]
+    jnz     _done                           
 _done:
+
     ret
-getscn endp
+validate_scn endp
 
 ; ----------------------------------------- ;                                   ;
 ; Resolve a DLL export by hash              ;                                   ;
-getexp proc base:qword, hash:qword ;                                   ;
-    ; push    rbx
-    ; push    rsi
-    ; push    rdi
-    ; push    r10
-    ; push    r11
-    ; push    r12
-    ; push    r13
-    ; push    r14
+getexp proc base:qword, hash:qword 
+    local   @rbx:qword
+    local   @rsi:qword
+    local   @rdi:qword
+    local   @r10:qword
+    local   @r11:qword
+    local   @r12:qword
+    local   @r13:qword
+    local   @r14:qword
+    mov     @rbx, rbx
+    mov     @rsi, rsi
+    mov     @r10, r10
+    mov     @r11, r11
+    mov     @r12, r12
+    mov     @r13, r13
+    mov     @r14, r14
     xor     eax, eax                        ; eax is offset holder              ;
     mov     rsi, rcx                        ; rsi is the module base            ;
     mov     r10, rsi                        ; r10 is a backup of the mod base   ;
@@ -346,14 +436,14 @@ _match:                                     ;                                   
     add     rax, r10                        ; get current function va           ;
     jmp     _done                           ; all done here                     ;
 _done:                                      ;                                   ;
-    ; pop     r14
-    ; pop     r13
-    ; pop     r12
-    ; pop     r11
-    ; pop     r10
-    ; pop     rdi
-    ; pop     rsi
-    ; pop     rbx
+    mov     r14, @r14
+    mov     r13, @r13
+    mov     r12, @r12
+    mov     r11, @r11
+    mov     r10, @r10
+    mov     rdi, @rdi
+    mov     rsi, @rsi
+    mov     rbx, @rbx
     retn                                    ;                                   ;
 getexp endp                                 ;                                   ;
 ; ----------------------------------------- ;                                   ;
@@ -362,9 +452,12 @@ getmod proc hash:qword             ;                                   ;
     local   modname[256*2]:byte             ; stack space for module name buf   ;
     local   first:qword                     ; first module entry                ;
     local   curr:qword                      ; current module entry              ;
-    ; push    rbx
-    ; push    rsi
-    ; push    rdi
+    local   @rbx:qword
+    local   @rsi:qword
+    local   @rdi:qword
+    mov     @rbx, rbx
+    mov     @rsi, rsi
+    mov     @rdi, rdi
     mov     rdi, rcx                        ;                                   ;
     mov     rsi, [gs:0x60]                  ; get PEB                           ;
     mov     rsi, [rsi].peb.ldr              ; rsi -> PEB_LDR_DATA entry         ;
@@ -395,17 +488,20 @@ _loop:                                      ; loop over modules                 
 _match:                                     ;                                   ;
     mov     rax, [rbx].ldte.dllbase         ; get dll base address              ;
 _done:                                      ;                                   ;
-    ; pop     rdi
-    ; pop     rsi
-    ; pop     rbx
+    mov     rdi, @rdi
+    mov     rsi, @rsi
+    mov     rbx, @rbx
     retn                                    ;                                   ;
 getmod endp                                 ;                                   ;
 ; ----------------------------------------- ;                                   ;
 ; Get a FNV32 hash of a buffer              ;                                   ;
 gethash proc src:qword, len:dword  ;                                   ;
-    ; push    rbx                             ;                                   ;
-    ; push    rsi                             ;                                   ;
-    ; push    rdi                             ;                                   ;
+    local   @rbx:qword
+    local   @rsi:qword
+    local   @rdi:qword
+    mov     @rbx, rbx
+    mov     @rsi, rsi
+    mov     @rdi, rdi
     xor     rbx, rbx                        ;                                   ;
     mov     rsi, rcx                        ; rsi is the source buffer          ;
     xor     ecx, ecx                        ; ecx is the counter                ;
@@ -424,50 +520,86 @@ _loop:                                      ; loop over src bytes               
     jmp     _loop                           ;                                   ;
 _done:                                      ;                                   ;
     xor     eax, random_mask                ; mask the hash                     ;
-    ; pop     rdi                             ;                                   ;
-    ; pop     rsi                             ;                                   ;
-    ; pop     rbx                             ;                                   ;
+    mov     rdi, @rdi
+    mov     rsi, @rsi
+    mov     rbx, @rbx
     retn                                    ;                                   ;
-gethash endp                                ;                                   ;
+gethash endp                              
+
 ; ----------------------------------------- ;
 ; Find matching bytes in memory
-find_bytes proc src:qword, buf:qword, len:dword, max:dword
-    ; push    rbx
-    ; push    rsi
-    ; push    rdi
-    ; push    r10
-    mov     rsi, rcx
-    mov     rdi, rdx
-    mov     rbx, r8
+find_bytes proc src:qword, buf:qword, len:qword, max:qword
+    local   @rbx:qword
+    local   @rsi:qword
+    local   @rdi:qword
+    local   @r10:qword
+    local   res:qword
+    mov     @rbx, rbx
+    mov     @rsi, rsi
+    mov     @rdi, rdi
+    mov     @r10, r10
+    mov     res, 0
     xor     r10, r10
 _loop:
-    xor     eax, eax
-    cmp     r10, r9
-    je      _done
-    mov     rcx, rsi
-    mov     rdx, rdi
-    inc     r10
-    inc     rsi
-    mov     r8, rbx
-    push    r9
+    mov     rcx, r10
+    add     rcx, len
+    cmp     rcx, max
+    ja      _done
+    mov     rcx, src
+    mov     rdx, buf
+    mov     r8, len
+    mov     rax, src
+    inc     src
     call    memcmp
-    pop     r9
     test    eax, eax
     jz      _loop
-_match:
-    dec     rsi
-    mov     rax, rsi
 _done:
-    ; pop     r10
-    ; pop     rdi
-    ; pop     rsi
-    ; pop     rbx
+    mov     res, rax
+    mov     rdi, @rdi
+    mov     rdi, @rdi
+    mov     rsi, @rsi
+    mov     rbx, @rbx
     ret
+;     ; mov     rsi, src
+;     ; mov     rdi, buf
+;     ; mov     ebx, len
+;     ; xor     r10, r10
+; ; _loop:
+;     ; xor     eax, eax
+;     ; mov     tmp, rax
+;     ; mov     eax, r10d
+;     ; add     eax, ebx
+;     ; cmp     eax, [max]
+;     ;pop     rax
+;     mov     rax, tmp
+;     ; ja      _done
+;     ; cmp     r10d, max
+;     ; mov     rcx, rsi
+;     ; mov     rdx, rdi
+;     ; inc     r10
+;     ; inc     rsi
+;     ; mov     r8, rbx
+;     ; mov     tmp2, r9
+;     ; call    memcmp
+;     mov     r9, tmp2
+;     test    eax, eax
+;     jz      _loop
+; _match:
+;     dec     rsi
+;     mov     rax, rsi
+; _done:
+;     mov     rdi, @rdi
+;     mov     rdi, @rdi
+;     mov     rsi, @rsi
+;     mov     rbx, @rbx
+;     ret
 find_bytes endp
 
 ; ----------------------------------------- ;
 ; Generic memcpy
 memcmp proc src:qword, dst:qword, len:dword
+    local   @rbx:qword
+    mov     @rbx, rbx
     xor     r9, r9
 _loop:
     cmp     r9, r8
@@ -481,14 +613,13 @@ _match:
     inc     r9
     jmp     _loop
 _done:
-    ; pop     rbx
+    mov     rbx, @rbx
     ret
 memcmp endp
 
 ; ----------------------------------------- ;                                   ;
 ; Generic memset                            ;                                   ;
-memset proc dst:qword, val:byte, len:dword                             ;
-
+memset proc dst:qword, val:byte, len:dword                             
     xor     eax, eax                        ;                                   ;
 _loop:                                      ;                                   ;
     cmp     r8d, eax                        ;                                   ;
@@ -497,13 +628,13 @@ _loop:                                      ;                                   
     inc     eax                             ;                                   ;
     jmp     _loop                           ;                                   ;
 _done:                                      ;                                   ;
-    ; pop     rbx                             ;                                   ;
     retn                                    ;                                   ;
 memset endp                                 ;                                   ;
 ; ----------------------------------------- ;                                   ;
 ; Copy a wide string                        ;                                   ;
-wstrcpy proc  dst:qword, src:qword  ;                                   ;
-    ; push    rbx                             ;                                   ;
+wstrcpy proc  dst:qword, src:qword 
+    local   @rbx:qword
+    mov     @rbx, rbx
     xor     eax, eax                        ;                                   ;
 _loop:                                      ;                                   ;
     mov     bx, [rdx+rax*2]                 ;                                   ;
@@ -513,13 +644,14 @@ _loop:                                      ;                                   
     inc     eax                             ;                                   ;
     jmp     _loop                           ;                                   ;
 _done:                                      ;                                   ;
-    ; pop     rbx                             ;                                   ;
+    mov     rbx, @rbx
     retn                                    ;                                   ;
 wstrcpy endp                                ;                                   ;
 ; ----------------------------------------- ;                                   ;
 ; Convert a wide string to lowercase        ;                                   ;
-wstrtolower proc  src:qword         ;                                   ;
-    ; push    rbx                             ;                                   ;
+wstrtolower proc  src:qword        
+    local   @rbx:qword
+    mov     @rbx, rbx                     
     xor     eax, eax                        ;                                   ;
 _loop:                                      ;                                   ;
     mov     bx, [rcx+rax*2]                 ;                                   ;
@@ -537,13 +669,14 @@ _next:                                      ;                                   
 _done:                                      ;                                   ;
     imul    eax, 2                          ;                                   ;
     inc     eax                             ;                                   ;
-    ; pop     rbx                             ;                                   ;
+    mov     rbx, @rbx
     retn                                    ;                                   ;
 wstrtolower endp                            ;                                   ;
 ; ----------------------------------------- ;                                   ;
 ; Calculate length of a string              ;                                   ;
-strlen proc  src:qword              ;                                   ;
-    ; push    rbx                             ;                                   ;
+strlen proc  src:qword            
+    local   @rbx:qword
+    mov     @rbx, rbx                     
     xor     eax, eax                        ;                                   ;
 _loop:                                      ;                                   ;
     mov     bl, [rcx+rax]                   ;                                   ;
@@ -552,10 +685,17 @@ _loop:                                      ;                                   
     inc     eax                             ;                                   ;
     jmp     _loop                           ;                                   ;
 _done:                                      ;                                   ;
-    ; pop     rbx                             ;                                   ;
+    mov     rbx, @rbx                   
     retn                                    ;                                   ;
 strlen endp                                 ;                                   ;
 ; ----------------------------------------- ;                                   ;
+; Pseudo-data section
+data:
+syscall_stub_sig:
+    db 0x4c, 0x8B, 0xD1, 0xB8        
+
+end_data:
+
 text ends                                   ;                                   ;
 end                                         ;                                   ;
 ;                                                                               ;
