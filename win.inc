@@ -1,7 +1,6 @@
 ifndef _win_inc
 _win_inc equ <1>
 
-
 list_entry struct
     fw   qword ?
     bk  qword ?
@@ -65,7 +64,7 @@ peb struct
     gdidcattributelist                  dword ?                 ; 0x0108
     padding3                             byte 4 dup(?)          ; 0x010c
     loaderlock                           qword ?                ; 0x0110
-    osmajorversion                       dword ?                ; 0x0118
+    maj_ver                              dword ?                ; 0x0118
     osminorversion                       dword ?                ; 0x011c
     osbuildnumber                        word ?                 ; 0x0120
     oscsdversion                         word ?                 ; 0x0122
@@ -242,7 +241,7 @@ opt_hdr struct
 opt_hdr ends
 
 nt_hdr struct
-    signature      dword ?                                      ; 0x0000
+    signature       dword ?                                     ; 0x0000
     fileheader      file_hdr <>                                 ; 0x0004
     opt             opt_hdr<>                                   ; 0x0018
 nt_hdr ends

@@ -1,6 +1,6 @@
 rule syscall {
     strings:
-        $syscall_bytes = { 0F 05 }
+        $syscall_bytes = { 4c 8B D1 B8 }
     condition:
         $syscall_bytes
 }

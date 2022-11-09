@@ -1,3 +1,12 @@
+; TODO: Rewrite everything to use locals (to avoid stack issues) OR
+;         write prolog and epilog macros that dynamically save non-volatile
+;         fastcall registers (http://masm32.com/board/index.php?topic=5850.0)
+;
+; TODO: Improve random generation using cli passed macro/definition
+; TODO: Add runtime polymorphism constructs (shuffle register table), macros    
+; TODO: Generic WINAPI Wrapper with automated prototypes (regular includes?)
+;
+;
 ; <main.asm>    -   Import Obfuscation Demonstration                            ;
 ;                           November 2022                                       ;
 ;                                                                               ;
@@ -46,7 +55,7 @@
 ;       ~ Enjoy!                                                                ;
 ;                                                                               ;
 ; -------------------------------------------------------------- yesh --------- ;
-option win64:0x08, casemap:none                                                 ;
+option win64:0x08, casemap:none, frame:auto, stackbase:rsp
 include win.inc                                                                 ;
 ; ----------------------------------------------------------------------------- ;
 ;                              Obfuscation Macros                               ;
@@ -146,7 +155,6 @@ emit_jmp_rel8 macro dist                                                        
     db dist                                                                     ;
 endm                                                                            ;
 
-
 ; ----------------------------------------------------------------------------- ;
 ;                           Dynamic Import Macros                               ;
 ; ----------------------------------------------------------------------------- ;
@@ -169,7 +177,7 @@ endm                                                                            
                                                                                 ;
 random_mask     equ static_rnd(0xffffffff)                                      ;
 hash_basis      equ            0xC59D1C81  xor random_mask                      ;
-hash_prime      equ            0x01000193  xor random_mask                      ;
+hash_prime      equ            0x01000193  xor random_mask                      ;   
                                                                                 ;
 ;                                                                               ;
 ; Our function hashes will all be double words of high entropy but at least     ;
@@ -177,78 +185,124 @@ hash_prime      equ            0x01000193  xor random_mask                      
 ;                                                                               ;
 hash_ntdll      equ            0x25959F7F xor random_mask                       ;
 hash_ntavm      equ            0x6973F2B4 xor random_mask                       ;
-hash_ntpvm      equ            0xB7F40932 xor random_mask                       ;
-                                                                                ;
+hash_ntpvm      equ            0x4c8bd1b8 xor random_mask                       ;
+                              
+;
+; Data structures
+;
 dynimp struct                               ; our dynamic import table          ;
     ntavm   qword ?
     ntpvm   qword ?
     len     dword ?                         ; number of entries                 ;
 dynimp ends                                                                     ;
-                                                                                ;
+                                                                                
+setup_syscalls proto :qword
+clobber_rdi proto :qword
 ;                                                                               ;
 ; ----------------------------------------------------------------------------- ;
 ;                               Executable Code                                 ;
 ; ----------------------------------------------------------------------------- ;
 text segment align(10h) 'code' read execute ;                                   ;
+; Pseudo-data section
+data:
+syscall_stub_sig:
+    db 0x4c, 0x8B, 0xD1, 0xB8        
+
+end_data:
+
 ;                                           ;                                   ;
 ; Program entry point                       ;                                   ;
-start proc                                  ;                                   ;
-    push    rbx
+start proc fastcall
+    local   dimp:dynimp
+    ; push    rbx
+    ; push    rsi
+    ; push    r10
+    mov     rcx, dimp
+    invoke setup_syscalls, rcx
+    invoke clobber_rdi, rcx
+    ; pop     r10
+    ; pop     rsi
+    ; pop     rbx
+    ret   
+start endp                           
+
+clobber_rdi@8 proc arg:qword
+    local dst:qword
+    mov dst, arg
+    ret
+clobber_rdi@8 endp
+
+setup_syscalls proc dimp:qword
+    ; push    rsi
+    ; push    rdi
+    mov     rdi, rcx
     mov     rcx, hash_ntdll                 ; encoded hash of `ntdll.dll`       ;
     call    getmod                          ; get module base of ntdll.dll      ;
-    mov     rcx, rax                        ; rcx is the module base            ;
-    mov     rbx, rax
+    mov     rsi, rax                        ; save ntdll base                   ;
+    mov     rcx, rax                        ; rcx is the module base            ;     
     mov     rdx, hash_ntavm                 ; rdx encoded function hash         ;
     call    getexp                          ; resolve address by hash           ;
-    mov     rcx, rax
-    lea     rdx, _syscall_sig
-    mov     r8, 2
-    mov     r9, 20
-    call    find_bytes
+    mov     rcx, rax                        ; pass NtAllocateVirtualMemory addr ;
+    call    getscn                          ; get syscall number/address        ;
+    xor     rax, random_mask                ; encode it                         ;
+    mov     [rdi].dynimp.ntavm, rax         ; store in dynamic import table     ;
+    mov     rcx, rsi                        ; reload ntdll base                 ;
+    mov     rdx, hash_ntpvm                 ; NtProtectVirtualMemory hash       ;
+    call    getexp                          ; resolve ntpvm by hash             ;
+    mov     rcx, rax                        ; pass NtProtectVirtualMemory addr  ;
+    call    getscn                          ; get syscall number/address        ;
+    ; pop     rdi
+    ; pop     rsi
+    ret
+setup_syscalls endp
 
+; Invoke either a system call export address or raw syscall number from rbx
+; If this fails inexplicably, check stack alignment
+exec_syscall proc
+    xor     rbx, random_mask
+    cmp     ebx, 0xfff
+    jg      _ptr
+    mov     r10, rcx
+    mov     eax, ebx
+    syscall
+    jmp     _done
+_ptr:
+    call    rbx
+_done:
+    ret
+exec_syscall ENDP
 
+; Get the syscall number from an NTDLL export address
+;
+; If a jump is found, its likely the syscall is hooked. This not only means
+; we have detection to worry about, but it complicates syscall resolution.
+;
+; The caller has to account for this in case getscn returns 0
+;
+getscn proc address:qword
+    xor     eax, eax
+    mov     rdx, syscall_stub_sig
+    mov     r8, 4
+    call    find_bytes                      ; search for 4C 8B D1 D8
+    test    eax, eax                        
+    jnz     _done                           ; signature not found - hook likely ;
+    add     rax, 4
+    mov     eax, [rax]
+_done:
+    ret
+getscn endp
 
-
-
-    mov     rcx, rax                        ; rcx is the unencoded address      ;
-    mov     rcx, rbx                    
-    mov     rdx, hash_ntpvm
-    call    getexp
-    ret   
-_syscall_sig:                                 
-    db 0x0f, 0x05
-    ;                                       ; 
-    ;                                       ; 
-start endp                                  ;                                   ;
-;                                           ;                                   ;
-; Address masking operations                ;                                   ;
-mask_ptr proc fastcall value:qword          ;                                   ;
-    push    rbx                             ;                                   ;
-    mov     ebx, random_mask                ; rbx is the mask                   ;
-    mov     rax, rcx                        ; rax is the address                ;
-    xor     ecx, ecx                        ; rcx is the counter                ;
-_loop:                                      ;                                   ;
-    cmp     ecx, 8                          ; eight is sufficient               ;
-    je      _done                           ;                                   ;
-    xor     rax, rbx                        ;                                   ;
-    inc     ecx                             ;                                   ;
-    shl     rbx, cl                         ; shift the mask over by the rcx    ;
-    jmp     _loop                           ; next operation                    ;
-_done:                                      ;                                   ;
-    pop     rbx                             ;                                   ;
-    ret                                     ; return the enc/dec address        ;
-mask_ptr endp                               ;                                   ;
 ; ----------------------------------------- ;                                   ;
 ; Resolve a DLL export by hash              ;                                   ;
-getexp proc fastcall base:qword, hash:qword ;                                   ;
-    push    rbx
-    push    rsi
-    push    rdi
-    push    r10
-    push    r11
-    push    r12
-    push    r13
-    push    r14
+getexp proc base:qword, hash:qword ;                                   ;
+    ; push    rbx
+    ; push    rsi
+    ; push    rdi
+    ; push    r10
+    ; push    r11
+    ; push    r12
+    ; push    r13
+    ; push    r14
     xor     eax, eax                        ; eax is offset holder              ;
     mov     rsi, rcx                        ; rsi is the module base            ;
     mov     r10, rsi                        ; r10 is a backup of the mod base   ;
@@ -292,25 +346,25 @@ _match:                                     ;                                   
     add     rax, r10                        ; get current function va           ;
     jmp     _done                           ; all done here                     ;
 _done:                                      ;                                   ;
-    pop     r14
-    pop     r13
-    pop     r12
-    pop     r11
-    pop     r10
-    pop     rdi
-    pop     rsi
-    pop     rbx
+    ; pop     r14
+    ; pop     r13
+    ; pop     r12
+    ; pop     r11
+    ; pop     r10
+    ; pop     rdi
+    ; pop     rsi
+    ; pop     rbx
     retn                                    ;                                   ;
 getexp endp                                 ;                                   ;
 ; ----------------------------------------- ;                                   ;
 ; Resolve a module base address by hash     ;                                   ;
-getmod proc fastcall hash:qword             ;                                   ;
+getmod proc hash:qword             ;                                   ;
     local   modname[256*2]:byte             ; stack space for module name buf   ;
     local   first:qword                     ; first module entry                ;
     local   curr:qword                      ; current module entry              ;
-    push    rbx
-    push    rsi
-    push    rdi
+    ; push    rbx
+    ; push    rsi
+    ; push    rdi
     mov     rdi, rcx                        ;                                   ;
     mov     rsi, [gs:0x60]                  ; get PEB                           ;
     mov     rsi, [rsi].peb.ldr              ; rsi -> PEB_LDR_DATA entry         ;
@@ -341,17 +395,17 @@ _loop:                                      ; loop over modules                 
 _match:                                     ;                                   ;
     mov     rax, [rbx].ldte.dllbase         ; get dll base address              ;
 _done:                                      ;                                   ;
-    pop     rdi
-    pop     rsi
-    pop     rbx
+    ; pop     rdi
+    ; pop     rsi
+    ; pop     rbx
     retn                                    ;                                   ;
 getmod endp                                 ;                                   ;
 ; ----------------------------------------- ;                                   ;
 ; Get a FNV32 hash of a buffer              ;                                   ;
-gethash proc fastcall src:qword, len:dword  ;                                   ;
-    push    rbx                             ;                                   ;
-    push    rsi                             ;                                   ;
-    push    rdi                             ;                                   ;
+gethash proc src:qword, len:dword  ;                                   ;
+    ; push    rbx                             ;                                   ;
+    ; push    rsi                             ;                                   ;
+    ; push    rdi                             ;                                   ;
     xor     rbx, rbx                        ;                                   ;
     mov     rsi, rcx                        ; rsi is the source buffer          ;
     xor     ecx, ecx                        ; ecx is the counter                ;
@@ -370,18 +424,18 @@ _loop:                                      ; loop over src bytes               
     jmp     _loop                           ;                                   ;
 _done:                                      ;                                   ;
     xor     eax, random_mask                ; mask the hash                     ;
-    pop     rdi                             ;                                   ;
-    pop     rsi                             ;                                   ;
-    pop     rbx                             ;                                   ;
+    ; pop     rdi                             ;                                   ;
+    ; pop     rsi                             ;                                   ;
+    ; pop     rbx                             ;                                   ;
     retn                                    ;                                   ;
 gethash endp                                ;                                   ;
 ; ----------------------------------------- ;
 ; Find matching bytes in memory
-find_bytes proc fastcall src:qword, buf:qword, len:dword, max:dword
-    push    rbx
-    push    rsi
-    push    rdi
-    push    r10
+find_bytes proc src:qword, buf:qword, len:dword, max:dword
+    ; push    rbx
+    ; push    rsi
+    ; push    rdi
+    ; push    r10
     mov     rsi, rcx
     mov     rdi, rdx
     mov     rbx, r8
@@ -404,17 +458,16 @@ _match:
     dec     rsi
     mov     rax, rsi
 _done:
-    pop     r10
-    pop     rdi
-    pop     rsi
-    pop     rbx
+    ; pop     r10
+    ; pop     rdi
+    ; pop     rsi
+    ; pop     rbx
     ret
 find_bytes endp
 
 ; ----------------------------------------- ;
 ; Generic memcpy
-memcmp proc fastcall src:qword, dst:qword, len:dword
-    push    rbx
+memcmp proc src:qword, dst:qword, len:dword
     xor     r9, r9
 _loop:
     cmp     r9, r8
@@ -428,14 +481,14 @@ _match:
     inc     r9
     jmp     _loop
 _done:
-    pop     rbx
+    ; pop     rbx
     ret
 memcmp endp
 
 ; ----------------------------------------- ;                                   ;
 ; Generic memset                            ;                                   ;
-memset proc fastcall dst:qword, val:byte, len:dword                             ;
-    push    rbx                             ;                                   ;
+memset proc dst:qword, val:byte, len:dword                             ;
+
     xor     eax, eax                        ;                                   ;
 _loop:                                      ;                                   ;
     cmp     r8d, eax                        ;                                   ;
@@ -444,13 +497,13 @@ _loop:                                      ;                                   
     inc     eax                             ;                                   ;
     jmp     _loop                           ;                                   ;
 _done:                                      ;                                   ;
-    pop     rbx                             ;                                   ;
+    ; pop     rbx                             ;                                   ;
     retn                                    ;                                   ;
 memset endp                                 ;                                   ;
 ; ----------------------------------------- ;                                   ;
 ; Copy a wide string                        ;                                   ;
-wstrcpy proc fastcall dst:qword, src:qword  ;                                   ;
-    push    rbx                             ;                                   ;
+wstrcpy proc  dst:qword, src:qword  ;                                   ;
+    ; push    rbx                             ;                                   ;
     xor     eax, eax                        ;                                   ;
 _loop:                                      ;                                   ;
     mov     bx, [rdx+rax*2]                 ;                                   ;
@@ -460,13 +513,13 @@ _loop:                                      ;                                   
     inc     eax                             ;                                   ;
     jmp     _loop                           ;                                   ;
 _done:                                      ;                                   ;
-    pop     rbx                             ;                                   ;
+    ; pop     rbx                             ;                                   ;
     retn                                    ;                                   ;
 wstrcpy endp                                ;                                   ;
 ; ----------------------------------------- ;                                   ;
 ; Convert a wide string to lowercase        ;                                   ;
-wstrtolower proc fastcall src:qword         ;                                   ;
-    push    rbx                             ;                                   ;
+wstrtolower proc  src:qword         ;                                   ;
+    ; push    rbx                             ;                                   ;
     xor     eax, eax                        ;                                   ;
 _loop:                                      ;                                   ;
     mov     bx, [rcx+rax*2]                 ;                                   ;
@@ -484,13 +537,13 @@ _next:                                      ;                                   
 _done:                                      ;                                   ;
     imul    eax, 2                          ;                                   ;
     inc     eax                             ;                                   ;
-    pop     rbx                             ;                                   ;
+    ; pop     rbx                             ;                                   ;
     retn                                    ;                                   ;
 wstrtolower endp                            ;                                   ;
 ; ----------------------------------------- ;                                   ;
 ; Calculate length of a string              ;                                   ;
-strlen proc fastcall src:qword              ;                                   ;
-    push    rbx                             ;                                   ;
+strlen proc  src:qword              ;                                   ;
+    ; push    rbx                             ;                                   ;
     xor     eax, eax                        ;                                   ;
 _loop:                                      ;                                   ;
     mov     bl, [rcx+rax]                   ;                                   ;
@@ -499,7 +552,7 @@ _loop:                                      ;                                   
     inc     eax                             ;                                   ;
     jmp     _loop                           ;                                   ;
 _done:                                      ;                                   ;
-    pop     rbx                             ;                                   ;
+    ; pop     rbx                             ;                                   ;
     retn                                    ;                                   ;
 strlen endp                                 ;                                   ;
 ; ----------------------------------------- ;                                   ;
@@ -509,18 +562,18 @@ end                                         ;                                   
 ; ----------------------------------------------------------------------------- ;
 ;                  C++ - Obfuscated Dynamic Imports (Example)                   ;
 ; -----------------------------------c----------------------------------------- ;
-; #define DYNIMP( x )      decltype( &x ) x
+; #define dynimp( x )      decltype( &x ) x
 ; #define D_TYPE( x )     (decltype( &x ))
 ; #define D_XOR_KEY       RND_XOR(0xffff)   // constexpr function call
 ;
 ; #define D_EXEC( e, ... ) \
 ;    ( ( decltype(e)((QWORD)(e) ^ D_XOR_KEY) )(__VA_ARGS__) )
 ;
-; typedef struct _DYNIMP_NTDLL
+; typedef struct _dynimp_NTDLL
 ; {
-;       DYNIMP(NtAllocateVirtualMemory);
+;       dynimp(NtAllocateVirtualMemory);
 ;       ...
-; } DYNIMP_NTDLL, * PDYNIMP_NTDLL;
+; } dynimp_NTDLL, * PDYNIMP_NTDLL;
 ; #define DYNIMP_NTDLL_LEN ( sizeof(DYNIMP_NTDLL) / sizeof(QWORD) )
 ;
 ; typedef struct _DYNIMP 
@@ -547,3 +600,8 @@ end                                         ;                                   
 ; D_EXEC(Api->Ntdll.Entries[idx], args...);
 ;
 ; ------------------------------------------------------------------------------;
+;                               References                                      ;
+; ------------------------------------------------------------------------------;
+; - https://zerosum0x0.blogspot.com/2019/?m=0
+;-  http://www.terraspace.co.uk/uasm233_ext.pdf
+;
