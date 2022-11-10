@@ -503,7 +503,9 @@ _loop:                                      ; loop over modules                 
     call    gethash                         ; get module name hash              ;
     cmp     rax, rdi                        ; match target?                     ;
     je      _match                          ;                                   ;
-    mov     rbx, [curr].ldte.moml.fw   ; while current != first            ;
+    mov     rbx, [curr].ldte.moml.fw-10h    ; while current != first            ;
+    mov     rbx, [rbx]
+    mov     curr, rbx
     cmp     rbx, first                      ;                                   ;
     je      _done                           ;                                   ;
     jmp     _loop                           ;                                   ;
