@@ -1,6 +1,10 @@
 ifndef _win_inc
 _win_inc equ <1>
 
+mem_commit      equ     1000h
+mem_reserve     equ     2000h
+page_readwrite  equ     04h
+
 list_entry struct
     fw   qword ?
     bk  qword ?

