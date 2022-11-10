@@ -274,6 +274,7 @@ max_stub_size   equ            0xffff
 ; Data structures
 ;
 dynimp struct                               ; our dynamic import table          ;
+    ntdll   qword ?
     ntavm   qword ?
     ntpvm   qword ?
     cfw     qword ?                         ; CreateFileW
@@ -285,6 +286,9 @@ dynimp ends                                                                     
 ; Function Prototypes
 ;                                                                             
 find_bytes      proto :qword, :qword, :qword, :qword
+setup           proto :qword
+genimps         proto :qword
+genstub         proto :qword, :qword
 
 fn_ntavm typedef proto :qword, :qword, :qword, :qword, :dword, :dword
 pntavm   typedef ptr fn_ntavm
@@ -320,16 +324,76 @@ text segment align(16) 'code' read execute
 ; the rest.
 ;
 start proc fastcall
-    call    genimps
+    local   pdimp:qword
+    invoke  setup, pdimp
+    invoke  genimps, pdimp
     ret   
 start endp
 
-; Generate a unique cipher stub for the address
-genimps proc 
-    local   pdimp:qword
+genimps proc pdimp:qword
+    local   @rbx:qword
+    local   @rsi:qword
+    local   @rdi:qword
+    mov     @rbx, rbx
+    mov     @rsi, rsi
+    mov     @rdi, rdi
+    sethash rbx, hash_cfw
+    mov     pdimp.dynimp.cfw, rbx
+    sethash rbx, hash_fff
+    mov     pdimp.dynimp.fff, rbx
+    mov     rbx, offset dynimp.cfw
+_loop:
+    cmp     ebx, pdimp.dynimp.len
+    je      _done
+    lea     rdx, pdimp
+    add     edx, ebx
+    invoke  genstub, pdimp, rdx
+    mov     [pdimp+rbx], rax
+    jmp     _loop
+_done:
+    mov     rdi, @rdi
+    mov     rsi, @rsi
+    mov     rbx, @rbx
+    ret
+genimps endp
+
+; Generate a decoding stub
+genstub proc pdimp:qword, slot:qword
     local   buf_size:qword
+    local   pbuf:qword
+    local   @rbx:qword
+    local   @rsi:qword
+    local   @rdi:qword
+    mov     @rbx, rbx
+    mov     @rsi, rsi
+    mov     @rdi, rdi
+    or      rcx, -1
+    lea     rdx, pdimp
+    mov     pbuf, 0
+    mov     r8, 7FFFFFFFFh
+    mov     buf_size, max_stub_size
+    lea     r9, buf_size
+    xor     pdimp.dynimp.ntavm, random_mask
+    invoke  fn_ntavm ptr pdimp.dynimp.ntavm, rcx, pbuf, r8, r9, 0x3000, 0x04
+    mov     pbuf, rax
+    mov     rcx, 2
+    call    rand_range
+_c1:
+    
+_c2:
 
+_c3:
 
+_done:
+    mov     rdi, @rdi
+    mov     rsi, @rsi
+    mov     rbx, @rbx
+    ret
+genstub endp
+
+; Generate a unique cipher stub for the address
+setup proc pdimp:qword
+    local   buf_size:qword
     local   ntavm:qword
     local   ntpvm:qword
     local   @rbx:qword
@@ -344,6 +408,8 @@ genimps proc
     call    getmod                          ; get module base of ntdll.dll      ;
     mov     rsi, rax                        ; save ntdll base                   ;
     mov     rcx, rax                        ; rcx is the module base            ;
+    xor     rax, random_mask
+    mov     pdimp.dynimp.ntdll, rax
     sethash rdx, hash_ntavm     
     call    getexp                          ; resolve address by hash           ;
     mov     ntavm, rax
@@ -368,41 +434,35 @@ genimps proc
     mov     rax, ntpvm
     xor     rax, random_mask
     mov     [rbx].dynimp.ntpvm, rax
-; resolve kernel32 exports
-    sethash rax, hash_cfw
-    mov     [rbx].dynimp.cfw, rax
-    sethash rax, hash_fff
-    mov     [rbx].dynimp.fff, rax
-    mov     [rbx].dynimp.len, 16
-    xor     eax, eax                        ; rax is the counter
-    mov     rcx, offset dynimp.cfw          ; first hash
-_resolve:
-    mov     rcx, rsi
-    add     rcx, rax
-    cmp     rcx, [rbx].dsynimp.len
-    je      _resolve_done
-    mov     rdx, [rbx+rcx]
-    mov     rcx, rsi
-    call    getexp
-
-    add     rax, 8
-    cmp     rax
-
-_resolve_done:
-
-
+    mov     [rbx].dynimp.len, sizeof dynimp
 ; clean up values left in volatile registers
     clobber_regs
     mov     rdi, @rdi
     mov     rsi, @rsi
     mov     rbx, @rbx
     ret
-genimps endp
+setup endp
 
-; Generate a decoding stub
-genstub proc buf:qword, dimp:qword, slot:qword
-
-genstub endp
+rand_range proc
+    push    rbx
+    push    rcx
+    push    rdx
+    push    rdx                     ; to preserve stack alignment
+    mov     r8, rcx
+_loop:
+    rdrand  rax                     ; use the RDRAND instruction to get a random quadword
+    mov     rbx, r8
+    mov     rcx, r8
+    lzcnt   rcx, rcx                ; count the number of leading zeroes
+    shr     rax, cl                 ; bit shift the random down to the same number of bits as max
+    cmp     rax, rbx
+    ja      _loop
+    pop     rdx
+    pop     rdx
+    pop     rcx
+    pop     rbx
+    ret
+rand_range endp
 
 ; Invoke either a system call export address or raw syscall number from rbx
 ; If this fails inexplicably, check stack alignment
@@ -704,47 +764,8 @@ end_data:
 
 text ends                                   ;                                   ;
 end                                         ;                                   ;
-;                                                                               ;
-; ----------------------------------------------------------------------------- ;
-;                  C++ - Obfuscated Dynamic Imports (Example)                   ;
-; -----------------------------------c----------------------------------------- ;
-; #define dynimp( x )      decltype( &x ) x
-; #define D_TYPE( x )     (decltype( &x ))
-; #define D_XOR_KEY       RND_XOR(0xffff)   // constexpr function call
-;
-; #define D_EXEC( e, ... ) \
-;    ( ( decltype(e)((QWORD)(e) ^ D_XOR_KEY) )(__VA_ARGS__) )
-;
-; typedef struct _dynimp_NTDLL
-; {
-;       dynimp(NtAllocateVirtualMemory);
-;       ...
-; } dynimp_NTDLL, * PDYNIMP_NTDLL;
-; #define DYNIMP_NTDLL_LEN ( sizeof(DYNIMP_NTDLL) / sizeof(QWORD) )
-;
-; typedef struct _DYNIMP 
-; {
-;       union { 
-;           DYNIMP_NTDLL  Apis
-;           PVOID       Entries[DYNIMP_NTDLL_LEN];
-;       } Ntdll;
-; } DYNIMP, * PDYNIMP;
-;
-; VOID ResolveDapi(PDYNIMP Api)
-; {
-;       constexpr NtdllHash = ...;
-;       constexpr FnvNtAllocateVirtualMemory = D_TYPE(NtAllocateVirtualMemory) 
-;           (FNV_NTALLOCATEVIRTUALMEMORY ^ D_XOR_KEY);
-;       for (... resolve the module and pointers to functions)
-;       {
-;           Api->Ntdll.Entries[idx] = (PVOID)((QWORD)Ptr ^ D_XOR_KEY);
-;       };       
-; }
-;
-; // now, just call the pointers like the normal function
-; 
-; D_EXEC(Api->Ntdll.Entries[idx], args...);
-;
+
+
 ; ------------------------------------------------------------------------------;
 ;                               References                                      ;
 ; ------------------------------------------------------------------------------;
