@@ -251,16 +251,16 @@ static_rnd macro __mask                                                         
 endm                                                                            ;
                                                                                 ;
 random_mask     equ static_rnd(0xffffffff)                                      ;
-hash_basis      equ            0xC59D1C81  xor random_mask                      ;
+hash_basis      equ            0x811c9dc5  xor random_mask                      ;
 hash_prime      equ            0x01000193  xor random_mask                      ;   
                                                                                 ;
 ;                                                                               ;
 ; Our function hashes will all be double words of high entropy but at least     ;
 ; they won't be a dead giveaway in a hash database                              ;
 ;                                                                               ;
-hash_ntdll      equ            0x8B9A6A34 xor random_mask                       ;
-hash_ntavm      equ            0x6973F2B4 xor random_mask                       ;
-hash_ntpvm      equ            0xB7F40932 xor random_mask                       ;
+hash_ntdll      equ            0xAA9558A0 xor random_mask                       ;
+hash_ntavm      equ            0xCA67B978 xor random_mask                       ;
+hash_ntpvm      equ            0xBD799926 xor random_mask                       ;
 hash_k32        equ            0xC1C79AF3 xor random_mask   
 hash_kbase      equ            0x6458F824 xor random_mask
 hash_cfw        equ            0x00000000 xor random_mask   ; CreateFileW
@@ -325,8 +325,10 @@ text segment align(16) 'code' read execute
 ;
 start proc fastcall
     local   pdimp:qword
-    invoke  setup, pdimp
-    invoke  genimps, pdimp
+
+invoke setup, pdimp
+invoke genimps, pdimp
+
     ret   
 start endp
 
@@ -347,7 +349,7 @@ _loop:
     je      _done
     lea     rdx, pdimp
     add     edx, ebx
-    invoke  genstub, pdimp, rdx
+invoke genstub, pdimp, rdx
     mov     [pdimp+rbx], rax
     jmp     _loop
 _done:
@@ -367,14 +369,13 @@ genstub proc pdimp:qword, slot:qword
     mov     @rbx, rbx
     mov     @rsi, rsi
     mov     @rdi, rdi
-    or      rcx, -1
-    lea     rdx, pdimp
+    lea     rdx, pbuf
     mov     pbuf, 0
-    mov     r8, 7FFFFFFFFh
+    mov     rax, pdimp.dynimp.ntavm
     mov     buf_size, max_stub_size
-    lea     r9, buf_size
-    xor     pdimp.dynimp.ntavm, random_mask
-    invoke  fn_ntavm ptr pdimp.dynimp.ntavm, rcx, pbuf, r8, r9, 0x3000, 0x04
+invoke fn_ntavm ptr rax, -1, addr pbuf, 7FFFFFFFFh, \
+    addr buf_size, 3000h, 4
+
     mov     pbuf, rax
     mov     rcx, 2
     call    rand_range
@@ -425,12 +426,10 @@ setup proc pdimp:qword
     mov     r8, 7FFFFFFFFh
     mov     buf_size, max_stub_size
     lea     r9, buf_size
-    invoke  fn_ntavm ptr ntavm, rcx, rdx, r8, r9, 0x3000, 0x04
+invoke fn_ntavm ptr ntavm, rcx, rdx, r8,\
+        r9, 3000h, 4
     mov     rbx, pdimp
 ; write current values to the dynamic imports table
-    mov     rax, ntavm 
-    xor     rax, random_mask
-    mov     [rbx].dynimp.ntavm, rax
     mov     rax, ntpvm
     xor     rax, random_mask
     mov     [rbx].dynimp.ntpvm, rax
@@ -450,7 +449,7 @@ rand_range proc
     push    rdx                     ; to preserve stack alignment
     mov     r8, rcx
 _loop:
-    rdrand  rax                     ; use the RDRAND instruction to get a random quadword
+    rdrand  rax                     ; 
     mov     rbx, r8
     mov     rcx, r8
     lzcnt   rcx, rcx                ; count the number of leading zeroes
@@ -484,7 +483,7 @@ validate_scn proc
     mov     rdx, syscall_stub_sig
     mov     r8, 4
     mov     r9, r8
-    invoke  find_bytes, rcx, rdx, r8, r9
+invoke find_bytes, rcx, rdx, r8, r9
     test    eax, eax                        
     jnz     _done                           
 _done:
@@ -498,66 +497,49 @@ getexp proc base:qword, hash:qword
     local   @rbx:qword
     local   @rsi:qword
     local   @rdi:qword
-    local   @r10:qword
-    local   @r11:qword
-    local   @r12:qword
-    local   @r13:qword
-    local   @r14:qword
+    local   aof:qword
+    local   aoo:qword
+    local   aon:qword
     mov     @rbx, rbx
     mov     @rsi, rsi
-    mov     @r10, r10
-    mov     @r11, r11
-    mov     @r12, r12
-    mov     @r13, r13
-    mov     @r14, r14
-    xor     eax, eax                        ; eax is offset holder              ;
-    mov     rsi, rcx                        ; rsi is the module base            ;
-    mov     r10, rsi                        ; r10 is a backup of the mod base   ;
-    mov     rdi, rdx                        ; rdi is the target hash            ;
-    mov     eax, [rsi].dos_hdr.e_lfanew     ; eax is nth offset                 ;
-    add     rsi, rax                        ; rsi is the nt header va           ;
-    lea     rsi, [rsi].nt_hdr.opt.d_dir     ; rsi is the rva of the data dir    ;
-    mov     ebx, [rsi].img_data_dir.va      ; rbx is the va of the export dir   ;
-    add     rbx, r10                        ; rbx is the va of export dir       ;
-    mov     eax, [rbx].exp_dir.aon          ; resolve AddressOfNames            ;
-    add     rax, r10                        ;                                   ;
-    mov     r12, rax                        ;                                   ;
-    mov     eax, [rbx].exp_dir.aof          ; resolve AddressOfFunctions        ;
-    add     rax, r10                        ;                                   ;
-    mov     r13, rax                        ;                                   ;
-    mov     eax, [rbx].exp_dir.aoo          ; resolve ordinals                  ;
-    add     rax, rsi
-    mov     r14, rax
-    xor     esi, esi                        ; esi is the counter                ;
-_loop:                                      ; iterate over the exports          ;
-    cmp     esi, [rbx].exp_dir.n_names      ;                                   ;
-    jge     _done                           ;                                   ;
-    mov     rcx, r12                        ; aon                               ;
-    mov     ecx, [rcx+rsi*4]                ; next offset                       ;
-    add     rcx, r10                        ; next va                           ;
-    mov     rbx, rcx                        ; rcd is va of string               ;
-    call    strlen                          ; calculate its length              ;
-    mov     rcx, rbx                        ;                                   ;
-    mov     edx, eax                        ;                                   ;
-    call    gethash                         ; calculate its hash                ;
-    inc     esi                             ; next ordinal                      ;
-    cmp     rax, rdi                        ; hashes match?                     ;
-    je      _match                          ; resolve the function address      ;
-    jmp     _loop                           ; next function                     ;
-_match:                                     ;                                   ;
-    xor     eax, eax                        ; resolve the function address      ;
-    mov     rcx, r14                        ; get current ordinal               ;
-    movzx   eax, word ptr [rcx+rsi*2]       ;                                   ;
-    mov     rcx, r13                        ;                                   ;
-    mov     eax, [rcx+rsi*4]                ; get current function rva          ;
-    add     rax, r10                        ; get current function va           ;
-    jmp     _done                           ; all done here                     ;
-_done:                                      ;                                   ;
-    mov     r14, @r14
-    mov     r13, @r13
-    mov     r12, @r12
-    mov     r11, @r11
-    mov     r10, @r10
+    mov     rax, base
+    mov     rdi, base
+    mov     eax, [rdi].dos_hdr.e_lfanew
+    add     rax, base
+    lea     rax, [rax].nt_hdr.opt.d_dir
+    mov     ebx, [rax].img_data_dir.va
+    add     rbx, base
+    mov     eax, [rbx].exp_dir.aof
+    add     rax, rdi
+    mov     aof, rax
+    mov     eax, [rbx].exp_dir.aoo
+    add     rax, rdi
+    mov     aoo, rax
+    mov     eax, [rbx].exp_dir.aon
+    add     rax, rdi
+    mov     aon, rax
+    xor     esi, esi
+_loop:                                      
+    cmp     esi, [rbx].exp_dir.n_names      
+    jge     _done                           
+    mov     rcx, aon                      
+    mov     ecx, [rcx+rsi*4]                
+    add     rcx, rdi                       
+    mov     rbx, rcx                        
+    call    strlen                          
+    mov     rcx, rbx                        
+    mov     edx, eax
+    inc     esi                      
+    call    gethash                    
+    cmp     rax, hash                       
+    je      _match                          
+    jmp     _loop                           
+_match:                                     
+    mov     rcx, aof                       
+    mov     eax, [rcx+rsi*4]                
+    add     rax, rdi                        
+    jmp     _done                           
+_done:                                      
     mov     rdi, @rdi
     mov     rsi, @rsi
     mov     rbx, @rbx
@@ -658,6 +640,7 @@ _loop:
     mov     rdx, buf
     mov     r8, len
     mov     rax, src
+    inc     r10
     inc     src
     call    memcmp
     test    eax, eax
