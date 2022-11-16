@@ -5,6 +5,8 @@ mem_commit      equ     1000h
 mem_reserve     equ     2000h
 page_readwrite  equ     04h
 
+generic_all     equ     10000000h
+
 list_entry struct
     fw   qword ?
     bk  qword ?
@@ -21,6 +23,52 @@ ucstr struct
     byte 4 dup(?)
     buffer  qword ?
 ucstr ends
+
+memory_basic_info        struct
+    address     QWORD   ?
+    alloc_base  QWORD   ?
+    alloc_protect       DWORD   ?
+    region_size      QWORD  ?
+    state   DWORD   ?
+    protect DWORD   ?
+    type_   DWORD   ?
+memory_basic_info        ends
+
+SECTION_EXECUTABLE_CODE equ 0x60000020
+SECTION_WRITABLE_DATA   equ 0xC0000040
+
+PAGE_NOACCESS           equ 0x01  
+PAGE_READONLY           equ 0x02  
+PAGE_READWRITE          equ 0x04  
+PAGE_WRITECOPY          equ 0x08  
+PAGE_EXECUTE            equ 0x10  
+PAGE_EXECUTE_READ       equ 0x20  
+PAGE_EXECUTE_READWRITE  equ 0x40  
+PAGE_EXECUTE_WRITECOPY  equ 0x80  
+PAGE_GUARD              equ 0x100  
+PAGE_NOCACHE            equ 0x200  
+PAGE_WRITECOMBINE       equ 0x400 
+
+err_no_more_files       equ 18
+
+FILETIME    struct
+    dwLowDateTime   DWORD   ?
+    dwHighDateTime  DWORD   ?
+FILETIME    ends
+
+
+find_data   struct 8    ;v2.02: alignment changed from 4 to 8
+    file_attrs          DWORD   ?
+    ft_created          FILETIME    <>
+    ft_last_access      FILETIME    <>
+    ft_last_write       FILETIME    <>
+    ft_size_hi          DWORD   ?
+    ft_size_lo          DWORD   ?
+    reserved0           DWORD   ?
+    reserved1           DWORD   ?
+    file_name           byte 256 dup (?)
+    alternate_name      byte 14 dup (?)
+find_data   ends
 
 peb struct
     inheritedaddressspace                byte ?                 ; 0x0000

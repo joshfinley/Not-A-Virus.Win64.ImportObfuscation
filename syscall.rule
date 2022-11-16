@@ -1,6 +1,0 @@
-rule syscall {
-    strings:
-        $syscall_bytes = { 4c 8B D1 B8 ?? ?? ?? ?? [0-12] 0F 05 }
-    condition:
-        $syscall_bytes
-}
